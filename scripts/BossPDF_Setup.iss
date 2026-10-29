@@ -32,6 +32,8 @@ Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; Grou
 
 [Files]
 Source: "..\dist\BossPDF\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\resources\pdf_doc_icon.ico"; DestDir: "{app}\resources"; Flags: ignoreversion
+Source: "..\resources\app_icon.ico"; DestDir: "{app}\resources"; Flags: ignoreversion
 Source: "..\resources\BossPDF_Security_Certificate.cer"; DestDir: "{app}\resources"; Flags: ignoreversion
 
 [Icons]
@@ -63,15 +65,14 @@ Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webp\shell\BossPDF
 
 ; 2. PDF 전용 문서 아이콘 및 연결 등록
 Root: HKCU; Subkey: "Software\Classes\BossPDF.Document"; ValueType: string; ValueName: ""; ValueData: "BossPDF PDF 문서"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\BossPDF.Document\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\resources\pdf_doc_icon.ico"",0"
+Root: HKCU; Subkey: "Software\Classes\BossPDF.Document\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\resources\pdf_doc_icon.ico"""
 Root: HKCU; Subkey: "Software\Classes\BossPDF.Document\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\resources\pdf_doc_icon.ico"",0"
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\resources\pdf_doc_icon.ico"""
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.pdf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\resources\pdf_doc_icon.ico"",0"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.pdf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\resources\pdf_doc_icon.ico"""; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "BossPDF 지금 실행하기"; Flags: postinstall nowait skipifsilent
-

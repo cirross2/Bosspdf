@@ -3,6 +3,7 @@ BossPDF PDF 문서 아이콘 등록 및 Windows Explorer 셸 아이콘 캐시 �
 """
 import sys
 import os
+import shutil
 import winreg
 import ctypes
 
@@ -15,9 +16,23 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 def register_pdf_doc_icon(exe_path: str = None, icon_path: str = None):
     current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    local_app_dir = os.path.expandvars(r"%LOCALAPPDATA%\Programs\BossPDF")
+    local_res_dir = os.path.join(local_app_dir, "resources")
+
+    # 대상 resources 디렉터리 보장 및 최신 아이콘 복사
+    os.makedirs(local_res_dir, exist_ok=True)
+    src_doc_ico = os.path.join(current_dir, "resources", "pdf_doc_icon.ico")
+    src_app_ico = os.path.join(current_dir, "resources", "app_icon.ico")
+    dst_doc_ico = os.path.join(local_res_dir, "pdf_doc_icon.ico")
+    dst_app_ico = os.path.join(local_res_dir, "app_icon.ico")
+
+    if os.path.exists(src_doc_ico):
+        shutil.copy2(src_doc_ico, dst_doc_ico)
+    if os.path.exists(src_app_ico):
+        shutil.copy2(src_app_ico, dst_app_ico)
 
     if exe_path is None:
-        installed_exe = os.path.expandvars(r"%LOCALAPPDATA%\Programs\BossPDF\BossPDF.exe")
+        installed_exe = os.path.join(local_app_dir, "BossPDF.exe")
         dist_exe = os.path.join(current_dir, "dist", "BossPDF", "BossPDF.exe")
         if os.path.exists(installed_exe):
             exe_path = installed_exe
@@ -27,35 +42,33 @@ def register_pdf_doc_icon(exe_path: str = None, icon_path: str = None):
             exe_path = f'"{sys.executable}" "{os.path.join(current_dir, "run.py")}"'
 
     if icon_path is None:
-        installed_ico = os.path.expandvars(r"%LOCALAPPDATA%\Programs\BossPDF\resources\pdf_doc_icon.ico")
-        local_ico = os.path.join(current_dir, "resources", "pdf_doc_icon.ico")
-        if os.path.exists(installed_ico):
-            icon_path = installed_ico
-        elif os.path.exists(local_ico):
-            icon_path = local_ico
+        if os.path.exists(dst_doc_ico):
+            icon_path = dst_doc_ico
+        elif os.path.exists(src_doc_ico):
+            icon_path = src_doc_ico
         else:
-            icon_path = os.path.join(current_dir, "resources", "app_icon.ico")
+            icon_path = src_app_ico
 
     print(f"[BossPDF] 등록할 PDF 문서 아이콘: {icon_path}")
     print(f"[BossPDF] 등록할 실행 파일 경로: {exe_path}")
 
-    # 1. ProgID 'BossPDF.Document' 등록
+    # 1. ProgID 'BossPDF.Document' 등록 (ICO 파일 단독 지정 시 ,0 생략)
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\BossPDF.Document") as k:
         winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "BossPDF PDF 문서")
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\BossPDF.Document\DefaultIcon") as k:
-        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{icon_path}",0')
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{icon_path}"')
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\BossPDF.Document\shell\open\command") as k:
         winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{exe_path}" "%1"')
 
     # 2. SystemFileAssociations\.pdf 에 DefaultIcon 등록
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\SystemFileAssociations\.pdf\DefaultIcon") as k:
-        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{icon_path}",0')
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{icon_path}"')
 
     # 3. Applications\BossPDF.exe 등록
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\Applications\BossPDF.exe\DefaultIcon") as k:
-        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{icon_path}",0')
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{icon_path}"')
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\Applications\BossPDF.exe\shell\open\command") as k:
         winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{exe_path}" "%1"')
@@ -82,7 +95,7 @@ def register_pdf_doc_icon(exe_path: str = None, icon_path: str = None):
     except Exception as e:
         print(f"SHChangeNotify 경고: {e}")
 
-    print("✅ BossPDF PDF 문서 아이콘 등록 성공!")
+    print("[BossPDF] PDF 문서 아이콘 등록 성공!")
     return True
 
 
