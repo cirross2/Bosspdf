@@ -1096,11 +1096,20 @@ class MainWindow(QMainWindow):
             dlg = UpdateDialog(self, update_info=info)
             dlg.exec()
         elif info and info.error_message:
-            QMessageBox.information(
-                self,
-                "업데이트 확인",
-                f"현재 최신 버전(v{__version__})을 사용 중이거나 아직 신규 릴리스가 등록되지 않았습니다.\n\n상세: {info.error_message}"
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("업데이트 확인 - BossPDF")
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.setText(f"<b>현재 최신 버전(v{__version__})을 사용 중입니다.</b>")
+            msg_box.setInformativeText(
+                f"• GitHub 저장소: {GITHUB_REPO_URL}\n" +
+                f"• 상태 안내: {info.error_message}\n\n" +
+                "※ GitHub Releases에 신규 버전(Setup.exe)이 등록되면 앱 시작 시 자동 감지 및 원클릭 업데이트가 지원됩니다."
             )
+            btn_ok = msg_box.addButton("확인", QMessageBox.ButtonRole.AcceptRole)
+            btn_repo = msg_box.addButton("GitHub 저장소 방문", QMessageBox.ButtonRole.ActionRole)
+            msg_box.exec()
+            if msg_box.clickedButton() == btn_repo:
+                self.open_github_repo()
         else:
             QMessageBox.information(
                 self,

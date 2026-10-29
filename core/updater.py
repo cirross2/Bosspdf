@@ -124,7 +124,7 @@ def check_github_update(
                 has_update=False,
                 current_version=current_version,
                 latest_version=current_version,
-                error_message="아직 등록된 릴리스가 없습니다 (404)."
+                error_message="GitHub 저장소에 발행된 Release(릴리스)가 없거나 저장소가 비공개(Private) 상태입니다."
             )
         return UpdateInfo(
             has_update=False,
