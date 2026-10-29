@@ -1,0 +1,6 @@
+PySide6>=6.6.0
+PyMuPDF>=1.23.0
+pikepdf>=8.0.0
+reportlab>=4.0.0
+pillow>=10.0.0
+pyinstaller>=6.0.0
