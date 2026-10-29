@@ -133,3 +133,17 @@ with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
 
 size_mb = os.path.getsize(zip_path) / (1024 * 1024)
 print(f"Release package generated successfully! Size: {size_mb:.2f} MB")
+
+# 6. Copy to root release directory if exists (e:\\코딩\\배포본)
+global_dist_dir = os.path.join(os.path.dirname(root_dir), '배포본')
+if os.path.exists(global_dist_dir):
+    try:
+        shutil.copy2(setup_src, os.path.join(global_dist_dir, setup_exe_name))
+        shutil.copy2(zip_path, os.path.join(global_dist_dir, os.path.basename(zip_path)))
+        target_pkg_dir = os.path.join(global_dist_dir, pkg_name)
+        if os.path.exists(target_pkg_dir):
+            shutil.rmtree(target_pkg_dir)
+        shutil.copytree(pkg_dir, target_pkg_dir)
+        print(f'Automatically copied to global 배포본: {global_dist_dir}')
+    except Exception as e:
+        print(f'Notice: Failed to copy to global 배포본: {e}')
