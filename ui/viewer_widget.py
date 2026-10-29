@@ -1,8 +1,9 @@
 """
 고성능 연속 스크롤(Continuous Scroll) 및 대화형 편집 지원 PDF 뷰어
-(글꼴/크기/스타일/색상/자동 줄맞춤 지원)
+(글꼴/크기/스타일/색상/자동 줄맞춤 지원, O(log N) 가상화 지연 렌더링, 버터처럼 부드러운 스크롤 최적화)
 """
 import enum
+import bisect
 from typing import Optional, List, Tuple
 import pymupdf as fitz
 from PySide6.QtWidgets import (
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect, QMessageBox, QGraphicsRectItem,
     QGraphicsPathItem
 )
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
     QPixmap, QColor, QPainter, QWheelEvent, QMouseEvent,
     QCursor, QPen, QBrush, QPainterPath
@@ -38,6 +39,7 @@ class PdfViewerWidget(QGraphicsView):
     page_changed = Signal(int, int)       # (current_page, total_pages)
     zoom_changed = Signal(float)          # zoom factor (1.0 = 100%)
     document_modified = Signal()          # 편집 발생 시그널
+    scroll_state_changed = Signal(bool)   # True: 스크롤 진행 중, False: 스크롤 유휴(Idle)
 
     PAGE_SPACING = 16.0  # 페이지 간격 (pt)
 
@@ -56,6 +58,7 @@ class PdfViewerWidget(QGraphicsView):
         self.page_items: List[QGraphicsPixmapItem] = []
         self.page_bg_items: List[QGraphicsRectItem] = []
         self.page_rects_in_scene: List[QRectF] = []
+        self.page_tops: List[float] = []
 
         # 검색어 블록 하이라이트 상태
         self.search_results: List[Tuple[int, fitz.Rect]] = []
@@ -69,6 +72,18 @@ class PdfViewerWidget(QGraphicsView):
         self._drag_rect_item: Optional[QGraphicsRectItem] = None
         self._pen_points: List[Tuple[float, float]] = []
         self._pen_path_item: Optional[QGraphicsPathItem] = None
+
+        # 초고속 부드러운 스크롤 제어 타이머
+        self._is_scrolling: bool = False
+        self._scroll_idle_timer = QTimer(self)
+        self._scroll_idle_timer.setSingleShot(True)
+        self._scroll_idle_timer.setInterval(220)
+        self._scroll_idle_timer.timeout.connect(self._on_scroll_idle)
+
+        self._page_emit_timer = QTimer(self)
+        self._page_emit_timer.setSingleShot(True)
+        self._page_emit_timer.setInterval(40)
+        self._page_emit_timer.timeout.connect(self._emit_page_changed)
 
         # macOS 미리보기 감성의 차분하고 눈이 편안한 캔버스 배경 설정
         self.setBackgroundBrush(QColor(AppleTheme.CANVAS_BG))
@@ -86,6 +101,10 @@ class PdfViewerWidget(QGraphicsView):
     def current_page(self) -> int:
         """현재 화면에 표시 중인 활성 페이지 번호 (0-based)"""
         return self._current_page
+
+    def set_theme(self, theme_mode: str):
+        """테마(다크/라이트)에 맞게 캔버스 배경색 갱신"""
+        self.setBackgroundBrush(QColor(AppleTheme.get_canvas_bg(theme_mode)))
 
     def set_engine(self, engine: PdfEngine):
         """PDF 엔진 바인딩 및 모든 페이지 연속 렌더링"""
@@ -116,6 +135,7 @@ class PdfViewerWidget(QGraphicsView):
         self.page_items.clear()
         self.page_bg_items.clear()
         self.page_rects_in_scene.clear()
+        self.page_tops.clear()
         self._rendered_pages.clear()
 
         if not self.pdf_engine or not self.pdf_engine.is_loaded():
@@ -133,12 +153,12 @@ class PdfViewerWidget(QGraphicsView):
             pix_h = rect.height * self.zoom_factor
             max_page_width = max(max_page_width, pix_w)
 
-            # 1. 애플 프리뷰 감성의 깔끔한 흰색 용지 배경 및 미세 테두리 (소프트웨어 블러 부하 제거)
+            # 1. 흰색 용지 배경 및 미세 테두리
             bg_item = self.scene.addRect(0, 0, pix_w, pix_h, border_pen, bg_brush)
             bg_item.setPos(0, current_y)
             self.page_bg_items.append(bg_item)
 
-            # 2. 고화질 렌더링 픽스맵 아이템 (가시 영역 진입 시 렌더링)
+            # 2. 고화질 렌더링 픽스맵 아이템 (가시 영역 진입 시 지연 렌더링)
             pix_item = QGraphicsPixmapItem()
             pix_item.setPos(0, current_y)
             self.scene.addItem(pix_item)
@@ -147,6 +167,7 @@ class PdfViewerWidget(QGraphicsView):
             # 3. 씬 좌표 내 페이지 영역 저장
             scene_page_rect = QRectF(0, current_y, pix_w, pix_h)
             self.page_rects_in_scene.append(scene_page_rect)
+            self.page_tops.append(current_y)
 
             current_y += pix_h + self.PAGE_SPACING
 
@@ -218,7 +239,7 @@ class PdfViewerWidget(QGraphicsView):
         if not (0 <= page_idx < len(self.page_rects_in_scene)):
             return
         page_scene = self.page_rects_in_scene[page_idx]
-        target_x = page_scene.left() + fitz_rect.irect.x0 * self.zoom_factor + (fitz_rect.width * self.zoom_factor) / 2.0
+        target_x = page_scene.left() + fitz_rect.x0 * self.zoom_factor + (fitz_rect.width * self.zoom_factor) / 2.0
         target_y = page_scene.top() + fitz_rect.y0 * self.zoom_factor + (fitz_rect.height * self.zoom_factor) / 2.0
         self.centerOn(target_x, target_y)
         self._current_page = page_idx
@@ -237,17 +258,24 @@ class PdfViewerWidget(QGraphicsView):
                 pass
         self.search_highlight_items.clear()
 
+    # ==================== O(log N) 가상화 지연 렌더링 및 부드러운 스크롤 ====================
+
     def _update_visible_pages(self):
-        """현재 화면에 보이는 페이지 및 인접 버퍼 페이지만 즉시 렌더링"""
+        """현재 화면에 보이는 페이지 및 상하 인접 페이지만 O(log N) 탐색으로 즉시 렌더링"""
         if not self.pdf_engine or not self.pdf_engine.is_loaded() or not self.page_rects_in_scene:
             return
 
-        # 뷰포트 영역 계산 (+상하 1200px 버퍼로 매끄러운 스크롤 보장)
+        # 뷰포트 영역 계산 (+상하 800px 버퍼로 매끄러운 스크롤 보장)
         v_rect = self.mapToScene(self.viewport().rect()).boundingRect()
-        vis_top = v_rect.top() - 1200.0
-        vis_bottom = v_rect.bottom() + 1200.0
+        vis_top = v_rect.top() - 800.0
+        vis_bottom = v_rect.bottom() + 800.0
 
-        for idx, rect in enumerate(self.page_rects_in_scene):
+        # O(log N) 이진 탐색으로 가시 범위 페이지 인덱스 즉각 산출
+        start_idx = max(0, bisect.bisect_right(self.page_tops, vis_top) - 1)
+        end_idx = min(len(self.page_rects_in_scene), bisect.bisect_right(self.page_tops, vis_bottom) + 1)
+
+        for idx in range(start_idx, end_idx):
+            rect = self.page_rects_in_scene[idx]
             if rect.bottom() >= vis_top and rect.top() <= vis_bottom:
                 if idx not in self._rendered_pages:
                     qimg = self.pdf_engine.render_page(idx, zoom=self.zoom_factor)
@@ -314,7 +342,16 @@ class PdfViewerWidget(QGraphicsView):
 
     def _get_page_at_scene_pos(self, scene_pos: QPointF) -> Tuple[int, Optional[fitz.Point]]:
         """씬 좌표가 어느 페이지에 해당하는지 및 해당 페이지 내부의 원본 PDF 좌표(pt) 반환"""
-        for idx, rect in enumerate(self.page_rects_in_scene):
+        if not self.page_rects_in_scene:
+            return -1, None
+        sy = scene_pos.y()
+        # O(log N) 근사 탐색
+        idx_guess = max(0, min(len(self.page_tops) - 1, bisect.bisect_right(self.page_tops, sy) - 1))
+        candidates = [idx_guess]
+        if idx_guess + 1 < len(self.page_rects_in_scene):
+            candidates.append(idx_guess + 1)
+        for idx in candidates:
+            rect = self.page_rects_in_scene[idx]
             if rect.contains(scene_pos):
                 rel_x = scene_pos.x() - rect.left()
                 rel_y = scene_pos.y() - rect.top()
@@ -324,26 +361,37 @@ class PdfViewerWidget(QGraphicsView):
         return -1, None
 
     def _on_scroll_changed(self):
-        """스크롤 시 화면 상단/중앙에 가장 많이 보이는 페이지 번호 감지 및 시그널 전송"""
+        """스크롤 이벤트 발생 시 고속 O(log N) 페이지 인덱스 계산 및 스크롤 상태 전달"""
         if not self.pdf_engine or not self.pdf_engine.is_loaded() or not self.page_rects_in_scene:
             return
 
+        # 스크롤 진행 중임을 통보 (백그라운드 썸네일 생성을 일시 정지시켜 렉 방지)
+        if not self._is_scrolling:
+            self._is_scrolling = True
+            self.scroll_state_changed.emit(True)
+        self._scroll_idle_timer.start()
+
         self._update_visible_pages()
 
+        # O(log N) 이진 탐색으로 현재 페이지 산출
         viewport_center_y = self.mapToScene(0, self.viewport().height() // 3).y()
-        current_idx = 0
-        for idx, rect in enumerate(self.page_rects_in_scene):
-            if rect.top() <= viewport_center_y <= rect.bottom():
-                current_idx = idx
-                break
-            elif rect.top() > viewport_center_y:
-                current_idx = max(0, idx - 1)
-                break
-            else:
-                current_idx = idx
+        current_idx = max(0, min(len(self.page_tops) - 1, bisect.bisect_right(self.page_tops, viewport_center_y) - 1))
 
-        self._current_page = current_idx
-        self.page_changed.emit(current_idx + 1, self.pdf_engine.page_count)
+        if current_idx != self._current_page:
+            self._current_page = current_idx
+            self._page_emit_timer.start()
+
+    def _on_scroll_idle(self):
+        """스크롤이 멈췄을 때 호출 (유휴 상태 복귀 및 백그라운드 썸네일 재개 허용)"""
+        self._is_scrolling = False
+        self.scroll_state_changed.emit(False)
+        self._update_visible_pages()
+        self._emit_page_changed()
+
+    def _emit_page_changed(self):
+        """디바운스된 페이지 변경 시그널 전송 (과도한 썸네일 재선택 부하 방지)"""
+        if self.pdf_engine and self.pdf_engine.is_loaded():
+            self.page_changed.emit(self._current_page + 1, self.pdf_engine.page_count)
 
     def wheelEvent(self, event: QWheelEvent):
         # Ctrl + 휠: 줌 인/아웃
@@ -358,148 +406,161 @@ class PdfViewerWidget(QGraphicsView):
             # 기본 세로 연속 스크롤 부드럽게 전달
             super().wheelEvent(event)
 
-    # ==================== 대화형 편집 마우스 이벤트 ====================
+    # ==================== 마우스 드래그 편집 상호작용 ====================
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() != Qt.MouseButton.LeftButton or not self.pdf_engine or not self.pdf_engine.is_loaded():
-            super().mousePressEvent(event)
-            return
+        if event.button() == Qt.MouseButton.LeftButton and self.current_mode != EditMode.HAND:
+            scene_pos = self.mapToScene(event.pos())
+            page_idx, pdf_pt = self._get_page_at_scene_pos(scene_pos)
 
-        scene_pos = self.mapToScene(event.pos())
-        page_idx, pdf_pt = self._get_page_at_scene_pos(scene_pos)
+            if page_idx >= 0 and pdf_pt is not None:
+                self._is_dragging = True
+                self._drag_start_scene = scene_pos
+                self._drag_start_page = page_idx
 
-        if self.current_mode == EditMode.HAND:
-            super().mousePressEvent(event)
-            return
+                if self.current_mode == EditMode.ADD_TEXT:
+                    # 클릭 즉시 서식 설정 대화상자 표시
+                    self._is_dragging = False
+                    self._handle_add_text_dialog(page_idx, pdf_pt)
+                    return
 
-        if page_idx == -1 or not pdf_pt:
-            return
-
-        # 1. 텍스트 추가 모드: 클릭 위치 기반 스마트 줄맞춤 분석 후 서식 설정 다이얼로그 호출
-        if self.current_mode == EditMode.ADD_TEXT:
-            snap_info = self.pdf_engine.find_nearest_text_line(page_idx, pdf_pt.x, pdf_pt.y)
-            dlg = TextEditDialog(
-                parent=self,
-                title="새 텍스트 추가 (서식 및 줄맞춤)",
-                init_x=pdf_pt.x,
-                init_y=pdf_pt.y,
-                init_w=300.0,
-                init_h=80.0,
-                snap_info=snap_info
-            )
-            if dlg.exec():
-                data = dlg.get_data()
-                if data["text"].strip():
-                    self.pdf_engine.add_text(
-                        page_num=page_idx,
-                        x=data["x"],
-                        y=data["y"],
-                        text=data["text"],
-                        font_family=data["font_family"],
-                        fontsize=data["fontsize"],
-                        is_bold=data["is_bold"],
-                        is_italic=data["is_italic"],
-                        color=data["color"],
-                        align=data["align"],
-                        width=data["w"],
-                        height=data["h"]
+                elif self.current_mode in (EditMode.WHITEOUT, EditMode.EDIT_TEXT):
+                    # 영역 드래그 사각형 생성
+                    self._drag_rect_item = self.scene.addRect(
+                        QRectF(scene_pos, scene_pos),
+                        QPen(QColor(AppleTheme.ACCENT_BLUE), 1, Qt.PenStyle.DashLine),
+                        QBrush(QColor(0, 122, 255, 30))
                     )
-                    self.reload_single_page(page_idx)
-                    self.document_modified.emit()
-            return
+                    self._drag_rect_item.setZValue(100)
 
-        # 2. 드래그 시작 (화이트아웃, 텍스트 수정, 형광펜, 펜)
-        self._is_dragging = True
-        self._drag_start_scene = scene_pos
-        self._drag_start_page = page_idx
+                elif self.current_mode == EditMode.HIGHLIGHT:
+                    self._drag_rect_item = self.scene.addRect(
+                        QRectF(scene_pos, scene_pos),
+                        QPen(QColor(255, 204, 0), 1),
+                        QBrush(QColor(255, 230, 0, 90))
+                    )
+                    self._drag_rect_item.setZValue(100)
 
-        if self.current_mode in (EditMode.WHITEOUT, EditMode.EDIT_TEXT, EditMode.HIGHLIGHT):
-            color = QColor(255, 255, 0, 100) if self.current_mode == EditMode.HIGHLIGHT else QColor(255, 255, 255, 180)
-            border_pen = QPen(Qt.GlobalColor.blue, 1, Qt.PenStyle.DashLine)
-            self._drag_rect_item = self.scene.addRect(QRectF(scene_pos, scene_pos), border_pen, QBrush(color))
-        elif self.current_mode == EditMode.PEN:
-            self._pen_points = [(pdf_pt.x, pdf_pt.y)]
-            pen = QPen(QColor(20, 50, 220), 2, Qt.PenStyle.SolidLine)
-            path = QPainterPath(scene_pos)
-            self._pen_path_item = self.scene.addPath(path, pen)
+                elif self.current_mode == EditMode.PEN:
+                    self._pen_points = [(pdf_pt.x, pdf_pt.y)]
+                    path = QPainterPath(scene_pos)
+                    self._pen_path_item = self.scene.addPath(
+                        path,
+                        QPen(QColor(0, 0, 0), 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                    )
+                    self._pen_path_item.setZValue(100)
+                return
+
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if not self._is_dragging or not self.pdf_engine:
-            super().mouseMoveEvent(event)
+        if self._is_dragging and self._drag_start_scene is not None:
+            cur_scene = self.mapToScene(event.pos())
+
+            if self._drag_rect_item is not None:
+                rect = QRectF(self._drag_start_scene, cur_scene).normalized()
+                self._drag_rect_item.setRect(rect)
+
+            elif self.current_mode == EditMode.PEN and self._pen_path_item is not None:
+                page_idx, pdf_pt = self._get_page_at_scene_pos(cur_scene)
+                if page_idx == self._drag_start_page and pdf_pt is not None:
+                    self._pen_points.append((pdf_pt.x, pdf_pt.y))
+                    path = self._pen_path_item.path()
+                    path.lineTo(cur_scene)
+                    self._pen_path_item.setPath(path)
             return
 
-        scene_pos = self.mapToScene(event.pos())
-
-        if self._drag_rect_item and self._drag_start_scene:
-            rect = QRectF(self._drag_start_scene, scene_pos).normalized()
-            self._drag_rect_item.setRect(rect)
-        elif self._pen_path_item:
-            path = self._pen_path_item.path()
-            path.lineTo(scene_pos)
-            self._pen_path_item.setPath(path)
-            _, pdf_pt = self._get_page_at_scene_pos(scene_pos)
-            if pdf_pt:
-                self._pen_points.append((pdf_pt.x, pdf_pt.y))
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if not self._is_dragging or not self.pdf_engine:
-            super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and self._is_dragging:
+            self._is_dragging = False
+            cur_scene = self.mapToScene(event.pos())
+            page_idx = self._drag_start_page
+
+            if self._drag_rect_item is not None:
+                self.scene.removeItem(self._drag_rect_item)
+                self._drag_rect_item = None
+
+            if self._pen_path_item is not None:
+                self.scene.removeItem(self._pen_path_item)
+                self._pen_path_item = None
+
+            if page_idx >= 0 and self.pdf_engine and self.pdf_engine.is_loaded():
+                page_scene_rect = self.page_rects_in_scene[page_idx]
+
+                if self.current_mode == EditMode.PEN and len(self._pen_points) > 1:
+                    self.pdf_engine.add_drawing(page_idx, self._pen_points, stroke_color=(0, 0, 0), width=2.5)
+                    self.reload_single_page(page_idx)
+                    self.document_modified.emit()
+                    self._pen_points = []
+                    return
+
+                # 드래그 영역을 PDF 포인트 단위 좌표로 변환
+                drag_rect = QRectF(self._drag_start_scene, cur_scene).normalized()
+                inter_rect = drag_rect.intersected(page_scene_rect)
+
+                if inter_rect.width() > 5 and inter_rect.height() > 5:
+                    rel_x = (inter_rect.left() - page_scene_rect.left()) / self.zoom_factor
+                    rel_y = (inter_rect.top() - page_scene_rect.top()) / self.zoom_factor
+                    rel_w = inter_rect.width() / self.zoom_factor
+                    rel_h = inter_rect.height() / self.zoom_factor
+                    fitz_rect = fitz.Rect(rel_x, rel_y, rel_x + rel_w, rel_y + rel_h)
+
+                    self._handle_drag_action(page_idx, fitz_rect)
             return
 
-        self._is_dragging = False
-        scene_pos = self.mapToScene(event.pos())
-        page_idx = self._drag_start_page
+        super().mouseReleaseEvent(event)
 
-        # 드래그 미리보기 아이템 제거
-        if self._drag_rect_item:
-            self.scene.removeItem(self._drag_rect_item)
-            self._drag_rect_item = None
-        if self._pen_path_item:
-            self.scene.removeItem(self._pen_path_item)
-            self._pen_path_item = None
+    def _handle_add_text_dialog(self, page_idx: int, pdf_pt: fitz.Point):
+        """텍스트 추가 대화상자 표시 및 삽입 처리"""
+        snap_info = self.pdf_engine.find_nearest_text_line(page_idx, pdf_pt.x, pdf_pt.y)
+        init_font = snap_info["font_family"] if snap_info else "맑은 고딕"
+        init_size = snap_info["fontsize"] if snap_info else 12.0
+        init_color = snap_info["color"] if snap_info else QColor("#000000")
+        init_y = snap_info["snap_y"] if (snap_info and snap_info.get("snap_y") is not None) else pdf_pt.y
 
-        if page_idx < 0 or page_idx >= len(self.page_rects_in_scene):
-            return
-
-        page_rect_scene = self.page_rects_in_scene[page_idx]
-
-        # 펜 드로잉 완료
-        if self.current_mode == EditMode.PEN:
-            if len(self._pen_points) >= 2:
-                self.pdf_engine.add_ink(page_idx, self._pen_points, color=(0.1, 0.2, 0.8), width=2.0)
+        dlg = TextEditDialog(
+            parent=self,
+            title="새 텍스트 삽입 (글꼴/크기/스타일/색상)",
+            initial_text="",
+            init_x=pdf_pt.x,
+            init_y=init_y,
+            init_w=200.0,
+            init_h=40.0,
+            initial_font=init_font,
+            initial_size=init_size,
+            initial_color=init_color,
+            snap_info=snap_info
+        )
+        if dlg.exec():
+            data = dlg.get_data()
+            if data["text"].strip():
+                self.pdf_engine.add_text(
+                    page_num=page_idx,
+                    x=data["x"],
+                    y=data["y"],
+                    text=data["text"],
+                    font_family=data["font_family"],
+                    fontsize=data["fontsize"],
+                    is_bold=data["is_bold"],
+                    is_italic=data["is_italic"],
+                    color=data["color"],
+                    align=data["align"],
+                    width=data["w"],
+                    height=data["h"]
+                )
                 self.reload_single_page(page_idx)
                 self.document_modified.emit()
-            self._pen_points.clear()
-            return
 
-        # 사각형 영역 계산
-        if not self._drag_start_scene:
-            return
-
-        rect_scene = QRectF(self._drag_start_scene, scene_pos).normalized()
-        rel_left = max(0.0, rect_scene.left() - page_rect_scene.left())
-        rel_top = max(0.0, rect_scene.top() - page_rect_scene.top())
-        rel_right = min(page_rect_scene.width(), rect_scene.right() - page_rect_scene.left())
-        rel_bottom = min(page_rect_scene.height(), rect_scene.bottom() - page_rect_scene.top())
-
-        if rel_right - rel_left < 5 or rel_bottom - rel_top < 5:
-            return  # 너무 작은 드래그 무시
-
-        fitz_rect = fitz.Rect(
-            rel_left / self.zoom_factor,
-            rel_top / self.zoom_factor,
-            rel_right / self.zoom_factor,
-            rel_bottom / self.zoom_factor
-        )
-
+    def _handle_drag_action(self, page_idx: int, fitz_rect: fitz.Rect):
+        """드래그 완료 후 모드별 동작 수행"""
         if self.current_mode == EditMode.WHITEOUT:
-            # 텍스트 삭제 (화이트아웃만 수행)
             self.pdf_engine.add_whiteout(page_idx, fitz_rect)
             self.reload_single_page(page_idx)
             self.document_modified.emit()
 
         elif self.current_mode == EditMode.EDIT_TEXT:
-            # 텍스트 수정: 기존 내용 추출 -> 서식 대화상자 -> 적용 시에만 화이트아웃 후 새 텍스트 삽입
             existing_text = ""
             existing_color = None
             try:
@@ -537,9 +598,7 @@ class PdfViewerWidget(QGraphicsView):
             )
             if dlg.exec():
                 data = dlg.get_data()
-                # 기존 영역 화이트아웃 처리
                 self.pdf_engine.add_whiteout(page_idx, fitz_rect)
-                # 새로운 텍스트 삽입
                 if data["text"].strip():
                     self.pdf_engine.add_text(
                         page_num=page_idx,
@@ -559,7 +618,6 @@ class PdfViewerWidget(QGraphicsView):
                 self.document_modified.emit()
 
         elif self.current_mode == EditMode.HIGHLIGHT:
-            # 형광펜 추가
             self.pdf_engine.add_highlight(page_idx, fitz_rect)
             self.reload_single_page(page_idx)
             self.document_modified.emit()

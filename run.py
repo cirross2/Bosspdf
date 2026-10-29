@@ -18,6 +18,7 @@ if CURRENT_DIR not in sys.path:
 from ui.main_window import MainWindow
 from ui.image_merge_dialog import ImageMergeDialog
 from ui.theme import AppleTheme
+from core.settings_manager import AppSettings
 from core.ipc_manager import handle_merge_cli, release_merge_mutex
 
 
@@ -54,6 +55,9 @@ def main():
         app = QApplication(sys.argv)
         app.setApplicationName("BossPDF")
         app.setOrganizationName("BossPDF")
+        theme_mode = AppSettings.get_theme_mode(default=AppleTheme.LIGHT)
+        app.setStyleSheet(AppleTheme.get_stylesheet(theme_mode))
+
         font = QFont("Segoe UI", 10)
         font.setStyleHint(QFont.StyleHint.SansSerif)
         app.setFont(font)
@@ -78,8 +82,9 @@ def main():
     font.setStyleHint(QFont.StyleHint.SansSerif)
     app.setFont(font)
 
-    # 애플 macOS 네이티브 테마 전역 적용
-    app.setStyleSheet(AppleTheme.get_stylesheet())
+    # 저장된 테마(다크/화이트) 전역 적용
+    saved_theme = AppSettings.get_theme_mode(default=AppleTheme.LIGHT)
+    app.setStyleSheet(AppleTheme.get_stylesheet(saved_theme))
 
     # 애플리케이션 아이콘 설정
     icon_path = get_resource_path("resources/app_icon.png")

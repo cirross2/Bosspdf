@@ -9,6 +9,7 @@ a = Analysis(
     binaries=winrt_binaries,
     datas=[('resources', 'resources')] + winrt_datas,
     hiddenimports=winrt_hiddenimports + [
+        'PySide6.QtSvg',
         'winrt.windows.media.ocr',
         'winrt.windows.globalization',
         'winrt.windows.storage.streams',
