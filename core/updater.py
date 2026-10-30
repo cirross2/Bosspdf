@@ -38,7 +38,6 @@ def parse_version(ver_str: str) -> Tuple[int, ...]:
         try:
             nums.append(int(part))
         except ValueError:
-            # 1.0.0-rc1 등의 경우 숫자만 추출
             digits = re.findall(r"\d+", part)
             if digits:
                 nums.append(int(digits[0]))
@@ -52,20 +51,55 @@ def is_newer_version(latest: str, current: str) -> bool:
     return parse_version(latest) > parse_version(current)
 
 
+def _get_github_token() -> Optional[str]:
+    """로컬 환경변수 또는 Git Credential Manager에서 GitHub 토큰을 조회"""
+    env_tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if env_tok:
+        return env_tok.strip()
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
+        proc = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            text=True,
+            timeout=2.5,
+            creationflags=creationflags
+        )
+        if proc.returncode == 0 and proc.stdout:
+            for line in proc.stdout.splitlines():
+                if line.startswith("password="):
+                    tok = line.split("=", 1)[1].strip()
+                    if tok:
+                        return tok
+    except Exception:
+        pass
+    return None
+
+
+def _build_github_headers(current_version: str, use_auth: bool = True) -> dict:
+    headers = {
+        "User-Agent": f"BossPDF-App/{current_version}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    if use_auth:
+        token = _get_github_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def check_github_update(
     current_version: str = __version__,
     owner: str = GITHUB_OWNER,
     repo: str = GITHUB_REPO,
     timeout: int = 6
 ) -> UpdateInfo:
-    """GitHub API를 통해 최신 릴리스 정보 확인"""
+    """GitHub API를 통해 최신 릴리스 정보 확인 (릴리스 미발행 시 main 브랜치 정상 상태 확인)"""
     api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     req = urllib.request.Request(
         api_url,
-        headers={
-            "User-Agent": f"BossPDF-App/{current_version}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+        headers=_build_github_headers(current_version, use_auth=True)
     )
 
     try:
@@ -120,6 +154,30 @@ def check_github_update(
 
     except urllib.error.HTTPError as e:
         if e.code == 404:
+            # 릴리스가 아직 없더라도 main 브랜치 커밋 조회가 성공하면 최신 버전 사용 중으로 정상 안내
+            try:
+                commits_url = f"https://api.github.com/repos/{owner}/{repo}/commits/main"
+                commit_req = urllib.request.Request(
+                    commits_url,
+                    headers=_build_github_headers(current_version, use_auth=True)
+                )
+                with urllib.request.urlopen(commit_req, timeout=timeout) as commit_resp:
+                    if commit_resp.status == 200:
+                        commit_data = json.loads(commit_resp.read().decode("utf-8"))
+                        sha_short = (commit_data.get("sha") or "")[:7]
+                        commit_msg = ((commit_data.get("commit") or {}).get("message") or "").splitlines()[0]
+                        pub_date = (((commit_data.get("commit") or {}).get("committer") or {}).get("date") or "")[:10]
+                        return UpdateInfo(
+                            has_update=False,
+                            current_version=current_version,
+                            latest_version=current_version,
+                            release_title=f"v{current_version} ({sha_short})" if sha_short else f"v{current_version}",
+                            release_notes=commit_msg,
+                            published_at=pub_date,
+                            error_message=None
+                        )
+            except Exception:
+                pass
             return UpdateInfo(
                 has_update=False,
                 current_version=current_version,
@@ -180,7 +238,7 @@ class DownloadUpdateThread(QThread):
 
             req = urllib.request.Request(
                 self.download_url,
-                headers={"User-Agent": f"BossPDF-App/{__version__}"}
+                headers=_build_github_headers(__version__, use_auth=True)
             )
 
             with urllib.request.urlopen(req, timeout=30) as resp:
