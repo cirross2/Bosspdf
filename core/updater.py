@@ -51,42 +51,11 @@ def is_newer_version(latest: str, current: str) -> bool:
     return parse_version(latest) > parse_version(current)
 
 
-def _get_github_token() -> Optional[str]:
-    """로컬 환경변수 또는 Git Credential Manager에서 GitHub 토큰을 조회"""
-    env_tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if env_tok:
-        return env_tok.strip()
-    try:
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
-        proc = subprocess.run(
-            ["git", "credential", "fill"],
-            input="protocol=https\nhost=github.com\n\n",
-            capture_output=True,
-            text=True,
-            timeout=2.5,
-            creationflags=creationflags
-        )
-        if proc.returncode == 0 and proc.stdout:
-            for line in proc.stdout.splitlines():
-                if line.startswith("password="):
-                    tok = line.split("=", 1)[1].strip()
-                    if tok:
-                        return tok
-    except Exception:
-        pass
-    return None
-
-
-def _build_github_headers(current_version: str, use_auth: bool = True) -> dict:
-    headers = {
+def _build_github_headers(current_version: str) -> dict:
+    return {
         "User-Agent": f"BossPDF-App/{current_version}",
         "Accept": "application/vnd.github.v3+json"
     }
-    if use_auth:
-        token = _get_github_token()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-    return headers
 
 
 def check_github_update(
@@ -99,7 +68,7 @@ def check_github_update(
     api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     req = urllib.request.Request(
         api_url,
-        headers=_build_github_headers(current_version, use_auth=True)
+        headers=_build_github_headers(current_version)
     )
 
     try:
@@ -159,7 +128,7 @@ def check_github_update(
                 commits_url = f"https://api.github.com/repos/{owner}/{repo}/commits/main"
                 commit_req = urllib.request.Request(
                     commits_url,
-                    headers=_build_github_headers(current_version, use_auth=True)
+                    headers=_build_github_headers(current_version)
                 )
                 with urllib.request.urlopen(commit_req, timeout=timeout) as commit_resp:
                     if commit_resp.status == 200:
@@ -238,7 +207,7 @@ class DownloadUpdateThread(QThread):
 
             req = urllib.request.Request(
                 self.download_url,
-                headers=_build_github_headers(__version__, use_auth=True)
+                headers=_build_github_headers(__version__)
             )
 
             with urllib.request.urlopen(req, timeout=30) as resp:
