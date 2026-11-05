@@ -18,6 +18,7 @@ class AppSettings:
     KEY_LAST_IMAGE_SAVE_DIR = "paths/last_image_save_dir"
     KEY_THEME_MODE = "appearance/theme_mode"
     KEY_SIDEBAR_VISIBLE = "appearance/sidebar_visible"
+    KEY_WINDOW_GEOMETRY = "window/geometry"
 
     @classmethod
     def _get_settings(cls) -> QSettings:
@@ -114,3 +115,14 @@ class AppSettings:
     @classmethod
     def set_sidebar_visible(cls, visible: bool):
         cls._get_settings().setValue(cls.KEY_SIDEBAR_VISIBLE, bool(visible))
+
+    # 7. 메인 창 위치·크기·최대화 상태 (QWidget.saveGeometry() 바이트)
+    @classmethod
+    def get_window_geometry(cls):
+        val = cls._get_settings().value(cls.KEY_WINDOW_GEOMETRY, None)
+        return val if val else None
+
+    @classmethod
+    def set_window_geometry(cls, geometry):
+        if geometry:
+            cls._get_settings().setValue(cls.KEY_WINDOW_GEOMETRY, geometry)

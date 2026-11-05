@@ -9,13 +9,14 @@ from PySide6.QtWidgets import (
     QDockWidget, QLineEdit, QLabel, QPushButton, QComboBox, QWidget,
     QHBoxLayout, QVBoxLayout, QFrame, QButtonGroup, QApplication
 )
-from PySide6.QtCore import Qt, QSize, QRectF, QEvent, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QActionGroup, QPainter, QImage, QShortcut
+from PySide6.QtCore import Qt, QSize, QRect, QRectF, QEvent, QTimer
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QActionGroup, QPainter, QImage, QShortcut, QGuiApplication
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog, QPrintPreviewDialog
 import pymupdf as fitz
 
 from core.pdf_engine import PdfEngine, EncryptedPdfError, InvalidPasswordError
 from core.settings_manager import AppSettings
+from core import window_cascade
 from core.version import __version__, GITHUB_REPO_URL
 from core.updater import CheckUpdateThread, UpdateInfo
 from ui.viewer_widget import PdfViewerWidget, EditMode
@@ -37,6 +38,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("BossPDF - 고성능 PDF 뷰어 & 편집기")
         self.resize(1280, 850)
+        self._restore_window_geometry()
+
+        # 이동/크기 변경 후 잠시 뒤 창 위치를 저장 (강제 종료·자동 업데이트 대비)
+        self._geometry_save_timer = QTimer(self)
+        self._geometry_save_timer.setSingleShot(True)
+        self._geometry_save_timer.setInterval(500)
+        self._geometry_save_timer.timeout.connect(self._save_window_geometry)
 
         self.current_theme = AppSettings.get_theme_mode(default=AppleTheme.LIGHT)
         self.pdf_engine = PdfEngine()
@@ -48,6 +56,74 @@ class MainWindow(QMainWindow):
 
         # 앱 시작 2.5초 후 백그라운드에서 조용히 최신 업데이트 확인
         QTimer.singleShot(2500, self._check_updates_background)
+
+    # ---------- 창 위치·크기 기억 + 계단식 배치 ----------
+    def _restore_window_geometry(self):
+        # 사용자가 직접 옮기거나 크기를 바꾼 경우에만 저장 (계단식으로 비켜 선 위치는 저장하지 않음)
+        self._geometry_tracking = False
+        self._geometry_changed_by_user = False
+
+        geometry = AppSettings.get_window_geometry()
+        if geometry is not None:
+            try:
+                self.restoreGeometry(geometry)
+            except Exception:
+                pass
+        self._cascade_if_overlapping()
+
+    def _cascade_if_overlapping(self):
+        """다른 BossPDF 창이 같은 자리에 떠 있으면 오른쪽 아래로 살짝 비켜서 열기"""
+        if self.isMaximized() or self.isFullScreen():
+            return
+        occupied = window_cascade.other_window_positions()
+        if not occupied:
+            return
+        geo = self.geometry()
+        bounds = None
+        screen = QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            bounds = (avail.left(), avail.top(), avail.right(), avail.bottom(), geo.width(), geo.height())
+        nx, ny = window_cascade.find_free_position(geo.x(), geo.y(), occupied, bounds)
+        if (nx, ny) != (geo.x(), geo.y()):
+            self.setGeometry(QRect(nx, ny, geo.width(), geo.height()))
+
+    def _publish_window_position(self):
+        geo = self.geometry()
+        window_cascade.publish_position(int(self.winId()), geo.x(), geo.y())
+
+    def _start_geometry_tracking(self):
+        self._geometry_tracking = True
+
+    def _save_window_geometry(self):
+        if self.isVisible() and not self.isMinimized() and self._geometry_changed_by_user:
+            AppSettings.set_window_geometry(self.saveGeometry())
+
+    def _on_geometry_changed(self):
+        if not getattr(self, "_geometry_tracking", False) or not self.isVisible():
+            return
+        self._publish_window_position()
+        self._geometry_changed_by_user = True
+        self._geometry_save_timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._publish_window_position()
+        # 첫 표시 직후 발생하는 시스템 이동/크기 이벤트는 사용자 조작으로 보지 않음
+        QTimer.singleShot(300, self._start_geometry_tracking)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._on_geometry_changed()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._on_geometry_changed()
+
+    def closeEvent(self, event):
+        self._save_window_geometry()
+        window_cascade.unpublish(int(self.winId()))
+        super().closeEvent(event)
 
     def _init_ui(self):
         # 중앙 컨테이너 (상단 Ctrl+F 검색바 + 연속 스크롤 뷰어)

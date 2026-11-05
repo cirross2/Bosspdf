@@ -2,7 +2,9 @@
 ; High-performance PDF Viewer & Editor
 
 #define MyAppName "BossPDF"
-#define MyAppVersion "1.0.1"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.3"
+#endif
 #define MyAppPublisher "BossPDF Software"
 #define MyAppExeName "BossPDF.exe"
 
@@ -15,7 +17,7 @@ DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=BossPDF_Setup_v1.0.1
+OutputBaseFilename=BossPDF_Setup_v{#MyAppVersion}
 SetupIconFile=..\resources\app_icon.ico
 Compression=lzma2/ultra
 SolidCompression=yes

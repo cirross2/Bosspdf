@@ -5,9 +5,17 @@ $rootDir = (Resolve-Path "$scriptDir\..").Path
 $resDir = Join-Path $rootDir "resources"
 $distDir = Join-Path $rootDir "dist"
 
-Write-Host "=== [1/4] BossPDF 디지털 서명용 보안 인증서 준비 ===" -ForegroundColor Cyan
+$versionFile = Join-Path $rootDir "core\version.py"
+$appVersion = "1.0.3"
+if (Test-Path $versionFile) {
+    $verMatch = Select-String -Path $versionFile -Pattern '__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($verMatch -and $verMatch.Matches.Count -gt 0) {
+        $appVersion = $verMatch.Matches[0].Groups[1].Value
+    }
+}
 
-# 1. 인증서 생성 또는 기존 인증서 확인
+Write-Host "=== [1/4] BossPDF (v$appVersion) 디지털 서명용 보안 인증서 준비 ===" -ForegroundColor Cyan
+
 $certName = "CN=BossPDF Software"
 $existingCert = Get-ChildItem -Path Cert:\CurrentUser\My | Where-Object { $_.Subject -eq $certName } | Select-Object -First 1
 
@@ -24,12 +32,10 @@ if (-not $existingCert) {
     $cert = $existingCert
 }
 
-# 2. 공개 인증서(.cer) 파일 내보내기 (resources 및 dist에 저장)
 $cerPath = Join-Path $resDir "BossPDF_Security_Certificate.cer"
 Export-Certificate -Cert $cert -FilePath $cerPath -Force | Out-Null
 Write-Host "공개 보안 인증서 내보내기 완료: $cerPath" -ForegroundColor Green
 
-# 3. BossPDF.exe 파일 서명
 $exePath = Join-Path $distDir "BossPDF\BossPDF.exe"
 if (Test-Path $exePath) {
     Write-Host "BossPDF.exe 디지털 서명 적용 중..." -ForegroundColor Cyan
@@ -37,7 +43,6 @@ if (Test-Path $exePath) {
     Write-Host "BossPDF.exe 서명 상태: $($sig.Status)" -ForegroundColor Green
 }
 
-# 4. Inno Setup 컴파일러 위치 찾기 및 컴파일
 $isccCandidates = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
@@ -52,18 +57,16 @@ foreach ($cand in $isccCandidates) {
 }
 
 if ($isccPath) {
-    Write-Host "=== [2/4] Inno Setup 기반 설치 파일(Setup.exe) 컴파일 ===" -ForegroundColor Cyan
+    Write-Host "=== [2/4] Inno Setup 기반 설치 파일(BossPDF_Setup_v$appVersion.exe) 컴파일 ===" -ForegroundColor Cyan
     $issFile = Join-Path $scriptDir "BossPDF_Setup.iss"
     if (Test-Path $issFile) {
-        & "$isccPath" "$issFile"
+        & "$isccPath" "/DMyAppVersion=$appVersion" "$issFile"
         if ($LASTEXITCODE -eq 0) {
             Write-Host "Inno Setup 컴파일 성공!" -ForegroundColor Green
 
-            # 생성된 최신 설치 파일(BossPDF_Setup_v*.exe) 서명
-            $setupExeItem = Get-ChildItem -Path $distDir -Filter "BossPDF_Setup_v*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-            if ($setupExeItem) {
-                $setupExe = $setupExeItem.FullName
-                Write-Host "$($setupExeItem.Name) 디지털 서명 적용 중..." -ForegroundColor Cyan
+            $setupExe = Join-Path $distDir "BossPDF_Setup_v$appVersion.exe"
+            if (Test-Path $setupExe) {
+                Write-Host "BossPDF_Setup_v$appVersion.exe 디지털 서명 적용 중..." -ForegroundColor Cyan
                 $setupSig = Set-AuthenticodeSignature -Certificate $cert -FilePath $setupExe -HashAlgorithm SHA256
                 Write-Host "설치 파일 서명 상태: $($setupSig.Status)" -ForegroundColor Green
                 Write-Host ""
