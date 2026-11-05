@@ -8,13 +8,13 @@ from typing import Optional, List, Tuple
 import pymupdf as fitz
 from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-    QGraphicsDropShadowEffect, QMessageBox, QGraphicsRectItem,
+    QGraphicsRectItem,
     QGraphicsPathItem
 )
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
     QPixmap, QColor, QPainter, QWheelEvent, QMouseEvent,
-    QCursor, QPen, QBrush, QPainterPath
+    QPen, QBrush, QPainterPath
 )
 
 from core.pdf_engine import PdfEngine

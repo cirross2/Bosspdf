@@ -1,7 +1,7 @@
 """
 BossPDF 버전 및 프로젝트 메타데이터 정의
 """
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 APP_NAME = "BossPDF"
 GITHUB_OWNER = "cirross2"
 GITHUB_REPO = "Bosspdf"

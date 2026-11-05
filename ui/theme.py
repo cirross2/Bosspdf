@@ -2,7 +2,7 @@
 Apple macOS 네이티브 스타일(Human Interface Guidelines 감성) 디자인 시스템 및 QSS 테마 모듈
 라이트 모드(White)와 다크 모드(Dark) 완벽 지원
 """
-from typing import Dict, Any
+from typing import Dict
 
 
 class AppleTheme:
@@ -120,7 +120,6 @@ class AppleTheme:
     def get_stylesheet(cls, theme_mode: str = LIGHT) -> str:
         """애플 네이티브 앱 감성의 통합 QSS 스타일시트 반환 (다크/라이트 지원)"""
         p = cls.get_palette(theme_mode)
-        is_dark = (theme_mode == cls.DARK)
 
         return f"""
         /* 전역 기본 설정 */
@@ -191,6 +190,43 @@ class AppleTheme:
             width: 1px;
             background-color: {p["BORDER_STANDARD"]};
             margin: 4px 6px;
+        }}
+
+        /* 왼쪽 세로 도구 레일 */
+        QToolBar#sideRail {{
+            border-bottom: none;
+            border-right: 1px solid {p["BORDER_SUBTLE"]};
+            padding: 6px 4px;
+            spacing: 4px;
+        }}
+        QToolBar#sideRail::separator {{
+            height: 1px;
+            width: 24px;
+            margin: 5px 6px;
+        }}
+        QToolButton#railMenuButton::menu-indicator {{
+            image: none;
+            width: 0px;
+        }}
+
+        /* 문서 위 플로팅 페이지/줌 바와 알림 */
+        QFrame#floatingBar {{
+            background-color: {p["CARD_BG"]};
+            border: 1px solid {p["BORDER_STANDARD"]};
+            border-radius: 17px;
+        }}
+        QFrame#floatingBar QToolButton {{
+            padding: 2px 4px;
+        }}
+        QFrame#floatingBar QLineEdit, QFrame#floatingBar QComboBox {{
+            min-height: 22px;
+        }}
+        QLabel#toastLabel {{
+            background-color: {p["CARD_BG"]};
+            color: {p["TEXT_PRIMARY"]};
+            border: 1px solid {p["BORDER_STANDARD"]};
+            border-radius: 10px;
+            padding: 6px 14px;
         }}
 
         /* 알약/아이콘 형태의 툴버튼 (Pill Buttons) */

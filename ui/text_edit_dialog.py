@@ -1,11 +1,11 @@
 """
 텍스트 추가 및 수정을 위한 글꼴/스타일/색상/자동 줄맞춤/수동 조절 대화상자
 """
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Optional, List
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QComboBox,
-    QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton, QColorDialog,
-    QGroupBox, QRadioButton, QButtonGroup, QFrame
+    QDoubleSpinBox, QCheckBox, QPushButton, QColorDialog,
+    QGroupBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor

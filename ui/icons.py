@@ -3,8 +3,8 @@ Apple SF Symbols 스타일의 미니멀 벡터 SVG 아이콘 관리 및 QIcon �
 """
 from typing import Dict, Optional
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
-from PySide6.QtCore import QByteArray, QSize, Qt
+from PySide6.QtGui import QIcon, QPixmap, QPainter
+from PySide6.QtCore import QByteArray, Qt
 
 
 # 24x24 그리드 기준의 Apple HIG 미니멀 라인 벡터 SVG 정의
@@ -170,6 +170,19 @@ SVG_ICONS: Dict[str, str] = {
     "close": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <line x1="18" y1="6" x2="6" y2="18"/>
         <line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>""",
+
+    "menu": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="4" y1="6" x2="20" y2="6"/>
+        <line x1="4" y1="12" x2="20" y2="12"/>
+        <line x1="4" y1="18" x2="20" y2="18"/>
+    </svg>""",
+
+    "fullscreen": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 9 4 4 9 4"/>
+        <polyline points="20 9 20 4 15 4"/>
+        <polyline points="4 15 4 20 9 20"/>
+        <polyline points="20 15 20 20 15 20"/>
     </svg>"""
 }
 

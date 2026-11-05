@@ -4,7 +4,7 @@
 """
 import os
 import winreg
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 from PySide6.QtGui import QFontDatabase
 
 

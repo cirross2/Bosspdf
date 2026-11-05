@@ -5,28 +5,23 @@ PDF 뷰어 및 편집기 메인 윈도우 UI
 import os
 from typing import Optional
 from PySide6.QtWidgets import (
-    QMainWindow, QToolBar, QStatusBar, QFileDialog, QMessageBox,
+    QMainWindow, QToolBar, QToolButton, QMenu, QSizePolicy, QFileDialog, QMessageBox,
     QDockWidget, QLineEdit, QLabel, QPushButton, QComboBox, QWidget,
-    QHBoxLayout, QVBoxLayout, QFrame, QButtonGroup, QApplication
+    QHBoxLayout, QVBoxLayout, QFrame, QApplication
 )
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QEvent, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QActionGroup, QPainter, QImage, QShortcut, QGuiApplication
-from PySide6.QtPrintSupport import QPrinter, QPrintDialog, QPrintPreviewDialog
-import pymupdf as fitz
+from PySide6.QtCore import Qt, QSize, QRect, QEvent, QTimer
+from PySide6.QtGui import QAction, QKeySequence, QActionGroup, QPainter, QShortcut, QGuiApplication
 
 from core.pdf_engine import PdfEngine, EncryptedPdfError, InvalidPasswordError
 from core.settings_manager import AppSettings
-from core import window_cascade
+from core import window_cascade, single_instance
 from core.version import __version__, GITHUB_REPO_URL
 from core.updater import CheckUpdateThread, UpdateInfo
 from ui.viewer_widget import PdfViewerWidget, EditMode
 from ui.thumbnail_widget import ThumbnailWidget
-from ui.image_merge_dialog import ImageMergeDialog
-from ui.page_reorder_dialog import PageReorderDialog
 from ui.password_dialog import PasswordDialog
-from ui.page_export_dialog import PageExportDialog
-from ui.update_dialog import UpdateDialog
 from ui.theme import AppleTheme
+from ui.overlays import FloatingBar, ToastLabel
 from ui.icons import get_icon
 
 
@@ -34,6 +29,9 @@ class MainWindow(QMainWindow):
     """
     연속 스크롤 뷰어 및 텍스트/마크업 편집 메인 윈도우
     """
+    _windows: list = []
+    _update_check_scheduled = False
+    _bg_update_thread = None
     def __init__(self):
         super().__init__()
         self.setWindowTitle("BossPDF - 고성능 PDF 뷰어 & 편집기")
@@ -54,8 +52,51 @@ class MainWindow(QMainWindow):
         self._update_title()
         self.apply_theme(self.current_theme)
 
-        # 앱 시작 2.5초 후 백그라운드에서 조용히 최신 업데이트 확인
-        QTimer.singleShot(2500, self._check_updates_background)
+        # 앱(프로세스)마다 한 번만, 시작 2.5초 후 백그라운드에서 최신 업데이트 확인
+        if not MainWindow._update_check_scheduled:
+            MainWindow._update_check_scheduled = True
+            QTimer.singleShot(2500, self._check_updates_background)
+
+    # ---------- 한 프로세스 안의 여러 문서 창 관리 ----------
+    @classmethod
+    def open_window(cls, pdf_path: Optional[str] = None) -> "MainWindow":
+        """새 문서 창을 열고 (같은 파일이 이미 열려 있으면 그 창을 앞으로) 반환"""
+        if pdf_path:
+            target = os.path.normcase(os.path.abspath(pdf_path))
+            for w in list(cls._windows):
+                fp = w.pdf_engine.file_path if w.pdf_engine and w.pdf_engine.is_loaded() else None
+                if fp and os.path.normcase(os.path.abspath(fp)) == target:
+                    w.bring_to_front()
+                    return w
+        win = cls()
+        win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        cls._windows.append(win)
+        win.show()
+        win.bring_to_front()
+        if pdf_path:
+            QTimer.singleShot(0, lambda: win.load_pdf(pdf_path))
+        return win
+
+    def bring_to_front(self):
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    @classmethod
+    def handle_external_request(cls, paths):
+        """다른 BossPDF 실행에서 전달받은 열기 요청 처리 (single_instance)"""
+        pdfs = [p for p in paths if p.lower().endswith(".pdf") and os.path.exists(p)]
+        if not pdfs:
+            cls.open_window(None)
+        for p in pdfs:
+            cls.open_window(p)
+
+    def nativeEvent(self, event_type, message):
+        handled = single_instance.handle_native_message(event_type, message, MainWindow.handle_external_request)
+        if handled:
+            return True, 1
+        return super().nativeEvent(event_type, message)
 
     # ---------- 창 위치·크기 기억 + 계단식 배치 ----------
     def _restore_window_geometry(self):
@@ -123,6 +164,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._save_window_geometry()
         window_cascade.unpublish(int(self.winId()))
+        if self in MainWindow._windows:
+            MainWindow._windows.remove(self)
         super().closeEvent(event)
 
     def _init_ui(self):
@@ -209,6 +252,8 @@ class MainWindow(QMainWindow):
         self.thumbnail_widget.page_reorder_requested.connect(self.open_page_reorder_dialog)
         self.thumbnail_widget.page_order_changed.connect(self._on_page_order_changed)
         self.dock_thumb.setWidget(self.thumbnail_widget)
+        # 패널 안에 같은 제목이 있으므로 도크 제목줄은 숨겨 세로 공간 확보 (닫기는 레일 버튼/Ctrl+B)
+        self.dock_thumb.setTitleBarWidget(QWidget(self.dock_thumb))
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_thumb)
 
         # 스크롤 최적화: 뷰어 스크롤 중 썸네일 생성 일시 정지 연동
@@ -219,353 +264,232 @@ class MainWindow(QMainWindow):
         self.dock_thumb.setVisible(initial_sidebar_vis)
         self.dock_thumb.visibilityChanged.connect(self._on_dock_visibility_changed)
 
-        # 상태 표시줄
-        self.status_bar = QStatusBar(self)
-        self.setStatusBar(self.status_bar)
-
-        self.lbl_status_file = QLabel("열린 파일 없음")
-        self.lbl_status_file.setStyleSheet("color: #86868B; font-weight: 500;")
-
-        self.lbl_status_mode = QLabel("모드: 이동/스크롤")
-        self.lbl_status_mode.setStyleSheet(
-            "background-color: #EBF3FF; color: #007AFF; font-weight: 600; padding: 2px 10px; border-radius: 8px;"
-        )
-
-        self.lbl_status_zoom = QLabel("120%")
-        self.lbl_status_zoom.setStyleSheet(
-            "background-color: #E5E5EA; color: #1D1D1F; font-weight: 500; padding: 2px 10px; border-radius: 8px;"
-        )
-
-        self.lbl_status_security = QLabel("🔒 암호 보호됨")
-        self.lbl_status_security.setStyleSheet(
-            "background-color: #FFF3CD; color: #856404; font-weight: 600; padding: 2px 10px; border-radius: 8px;"
-        )
-        self.lbl_status_security.setVisible(False)
-
-        self.status_bar.addWidget(self.lbl_status_file, 1)
-        self.status_bar.addPermanentWidget(self.lbl_status_security)
-        self.status_bar.addPermanentWidget(self.lbl_status_mode)
-        self.status_bar.addPermanentWidget(self.lbl_status_zoom)
+        # 상태 표시줄은 쓰지 않음: 알림은 문서 위 토스트(self.status_bar)로 표시 (_create_menus_and_toolbars)
 
     def _create_menus_and_toolbars(self):
-        # 1. 파일 및 탐색 툴바 (아이콘 전용, 텍스트 미표시, 툴팁 지원)
-        toolbar_main = QToolBar("파일 및 탐색 도구", self)
-        toolbar_main.setIconSize(QSize(20, 20))
-        toolbar_main.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        toolbar_main.setMovable(False)
-        self.addToolBar(toolbar_main)
+        # ---------- 액션 정의 (단축키는 창에 직접 등록해 메뉴바 없이도 동작) ----------
+        def make_action(text, slot=None, shortcut=None, tip=None, checkable=False):
+            act = QAction(text, self)
+            if shortcut is not None:
+                act.setShortcut(QKeySequence(shortcut) if isinstance(shortcut, str) else shortcut)
+            if tip:
+                act.setToolTip(tip)
+                act.setStatusTip(tip)
+            act.setCheckable(checkable)
+            if slot is not None:
+                act.triggered.connect(slot)
+            self.addAction(act)
+            return act
 
-        # [Apple 프리뷰 스타일 맨 앞 버튼] 사이드바 토글 (Ctrl+B)
-        self.act_sidebar = QAction("사이드바 보기/가리기", self)
-        self.act_sidebar.setShortcut(QKeySequence("Ctrl+B"))
-        self.act_sidebar.setStatusTip("좌측 페이지 썸네일 사이드바 최소화/표시 토글 (Ctrl+B)")
-        self.act_sidebar.setToolTip("사이드바 최소화/표시 (Ctrl+B)")
-        self.act_sidebar.setCheckable(True)
+        self.act_sidebar = make_action("페이지 썸네일 보기/가리기", self.toggle_sidebar, "Ctrl+B",
+                                       "페이지 썸네일 보기/가리기 (Ctrl+B)", checkable=True)
         self.act_sidebar.setChecked(self.dock_thumb.isVisible())
-        self.act_sidebar.triggered.connect(self.toggle_sidebar)
-        toolbar_main.addAction(self.act_sidebar)
 
-        toolbar_main.addSeparator()
-
-        # 파일 열기
-        self.act_open = QAction("열기", self)
-        self.act_open.setShortcut(QKeySequence.StandardKey.Open)
-        self.act_open.setStatusTip("PDF 파일 열기 (Ctrl+O)")
-        self.act_open.setToolTip("파일 열기 (Ctrl+O)")
-        self.act_open.triggered.connect(self.open_file_dialog)
-        toolbar_main.addAction(self.act_open)
-
-        # 저장
-        self.act_save = QAction("저장", self)
-        self.act_save.setShortcut(QKeySequence.StandardKey.Save)
-        self.act_save.setStatusTip("문서 저장 (Ctrl+S)")
-        self.act_save.setToolTip("저장 (Ctrl+S)")
-        self.act_save.triggered.connect(self.save_file)
-        toolbar_main.addAction(self.act_save)
-
-        # 비밀번호 해제 후 저장
-        self.act_remove_password = QAction("비밀번호 해제 후 저장", self)
-        self.act_remove_password.setStatusTip("문서의 비밀번호를 완전히 해제하여 저장 (이후 비밀번호 없이 열람 가능)")
-        self.act_remove_password.setToolTip("비밀번호 해제 후 저장")
-        self.act_remove_password.triggered.connect(self.on_remove_password_and_save)
+        self.act_open = make_action("열기...", self.open_file_dialog, QKeySequence.StandardKey.Open, "파일 열기 (Ctrl+O)")
+        self.act_save = make_action("저장", self.save_file, QKeySequence.StandardKey.Save, "저장 (Ctrl+S)")
+        self.act_save_as = make_action("다른 이름으로 저장...", self.save_as_file, QKeySequence.StandardKey.SaveAs)
+        self.act_remove_password = make_action("비밀번호 해제 후 저장", self.on_remove_password_and_save,
+                                               tip="문서의 비밀번호를 완전히 해제하여 저장")
         self.act_remove_password.setEnabled(False)
         self.act_remove_password.setVisible(False)
-        toolbar_main.addAction(self.act_remove_password)
+        self.act_export_pages = make_action("페이지 내보내기...", self.open_export_dialog, "Ctrl+E",
+                                            "특정 페이지를 새 PDF나 이미지로 내보내기 (Ctrl+E)")
+        self.act_print = make_action("인쇄...", self.print_document, QKeySequence.StandardKey.Print, "인쇄 (Ctrl+P)")
+        self.act_print_preview = make_action("인쇄 미리보기...", self.print_preview)
+        self.act_img_merge = make_action("이미지를 PDF로 합치기...", self.open_image_merge_dialog,
+                                         tip="여러 이미지를 순서대로 하나의 PDF로 합치기")
+        self.act_reorder = make_action("페이지 순서 관리...", self.open_page_reorder_dialog,
+                                       tip="전체 페이지 순서 변경 및 관리")
+        self.act_find = make_action("단어 검색", self.open_search_bar, QKeySequence.StandardKey.Find, "단어 검색 (Ctrl+F)")
+        self.act_theme = make_action("테마 전환", self.toggle_theme, "Ctrl+T")
+        self.act_fullscreen = make_action("집중 모드 (전체 화면)", self.toggle_focus_mode, "F11",
+                                          "도구를 모두 숨기고 문서만 보기 (F11, 나가기: Esc)", checkable=True)
+        self.act_exit = make_action("종료", self.close, QKeySequence.StandardKey.Quit)
 
-        # 내보내기 (특정 페이지 / 이어붙인 이미지)
-        self.act_export_pages = QAction("내보내기...", self)
-        self.act_export_pages.setShortcut(QKeySequence("Ctrl+E"))
-        self.act_export_pages.setStatusTip("특정 페이지만 새 PDF로 추출하거나 개별/이어붙인 이미지로 저장 (Ctrl+E)")
-        self.act_export_pages.setToolTip("페이지 내보내기 / 이어붙이기 (Ctrl+E)")
-        self.act_export_pages.triggered.connect(self.open_export_dialog)
-        toolbar_main.addAction(self.act_export_pages)
-
-        # 인쇄
-        self.act_print = QAction("인쇄...", self)
-        self.act_print.setShortcut(QKeySequence.StandardKey.Print)
-        self.act_print.setStatusTip("문서 인쇄 (Ctrl+P)")
-        self.act_print.setToolTip("인쇄 (Ctrl+P)")
-        self.act_print.triggered.connect(self.print_document)
-        toolbar_main.addAction(self.act_print)
-
-        toolbar_main.addSeparator()
-
-        # 페이지 이동 컨트롤 (◀ 1 / 0 ▶)
-        self.btn_prev_page = QPushButton()
-        self.btn_prev_page.setToolTip("이전 페이지")
-        self.btn_prev_page.setFixedSize(28, 26)
-        self.btn_prev_page.clicked.connect(self._on_prev_page)
-        toolbar_main.addWidget(self.btn_prev_page)
-
-        self.txt_page = QLineEdit("1")
-        self.txt_page.setFixedWidth(40)
-        self.txt_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.txt_page.returnPressed.connect(self._on_jump_page)
-        toolbar_main.addWidget(self.txt_page)
-
-        self.lbl_total_page = QLabel("/ 0")
-        self.lbl_total_page.setStyleSheet("color: #86868B; font-weight: 500; padding: 0 4px;")
-        toolbar_main.addWidget(self.lbl_total_page)
-
-        self.btn_next_page = QPushButton()
-        self.btn_next_page.setToolTip("다음 페이지")
-        self.btn_next_page.setFixedSize(28, 26)
-        self.btn_next_page.clicked.connect(self._on_next_page)
-        toolbar_main.addWidget(self.btn_next_page)
-
-        toolbar_main.addSeparator()
-
-        # 줌 컨트롤
-        self.act_zoom_out = QAction("축소", self)
-        self.act_zoom_out.setShortcut(QKeySequence.StandardKey.ZoomOut)
-        self.act_zoom_out.setStatusTip("화면 축소 (Ctrl+-)")
-        self.act_zoom_out.setToolTip("축소 (Ctrl+-)")
-        self.act_zoom_out.triggered.connect(self.viewer.zoom_out)
-        toolbar_main.addAction(self.act_zoom_out)
-
-        self.combo_zoom = QComboBox()
-        self.combo_zoom.addItems(["50%", "75%", "100%", "120%", "150%", "200%"])
-        self.combo_zoom.setCurrentText("120%")
-        self.combo_zoom.setFixedWidth(78)
-        self.combo_zoom.currentTextChanged.connect(self._on_combo_zoom_changed)
-        toolbar_main.addWidget(self.combo_zoom)
-
-        self.act_zoom_in = QAction("확대", self)
-        self.act_zoom_in.setShortcut(QKeySequence.StandardKey.ZoomIn)
-        self.act_zoom_in.setStatusTip("화면 확대 (Ctrl++)")
-        self.act_zoom_in.setToolTip("확대 (Ctrl++)")
-        self.act_zoom_in.triggered.connect(self.viewer.zoom_in)
-        toolbar_main.addAction(self.act_zoom_in)
-
-        self.act_fit_width = QAction("너비 맞춤", self)
-        self.act_fit_width.setStatusTip("화면 너비에 페이지 맞춤")
-        self.act_fit_width.setToolTip("너비 맞춤")
-        self.act_fit_width.triggered.connect(self.viewer.fit_to_width)
-        toolbar_main.addAction(self.act_fit_width)
-
-        self.act_fit_page = QAction("전체 맞춤", self)
-        self.act_fit_page.setStatusTip("화면에 1페이지 전체 맞춤")
-        self.act_fit_page.setToolTip("전체 맞춤")
-        self.act_fit_page.triggered.connect(self.viewer.fit_to_page)
-        toolbar_main.addAction(self.act_fit_page)
-
-        toolbar_main.addSeparator()
-
-        # 이미지들을 PDF로 합치기
-        self.act_img_merge = QAction("이미지 병합", self)
-        self.act_img_merge.setStatusTip("선택한 여러 이미지를 순서대로 단일 PDF로 즉시 병합")
-        self.act_img_merge.setToolTip("이미지들을 PDF로 병합")
-        self.act_img_merge.triggered.connect(self.open_image_merge_dialog)
-        toolbar_main.addAction(self.act_img_merge)
-
-        # 페이지 순서 변경 및 관리
-        self.act_reorder = QAction("순서 관리", self)
-        self.act_reorder.setStatusTip("전체 페이지 순서 변경 및 관리 대화상자 열기")
-        self.act_reorder.setToolTip("페이지 순서 관리")
-        self.act_reorder.triggered.connect(self.open_page_reorder_dialog)
-        toolbar_main.addAction(self.act_reorder)
-
-        toolbar_main.addSeparator()
-
-        # 문서 내 단어 검색 (Ctrl+F)
-        self.act_find = QAction("검색", self)
-        self.act_find.setShortcut(QKeySequence.StandardKey.Find)
-        self.act_find.setStatusTip("문서 내 단어 검색 및 위치 이동 (Ctrl+F)")
-        self.act_find.setToolTip("단어 검색 (Ctrl+F)")
-        self.act_find.triggered.connect(self.open_search_bar)
-        toolbar_main.addAction(self.act_find)
+        self.act_zoom_out = make_action("축소", self.viewer.zoom_out, QKeySequence.StandardKey.ZoomOut, "축소 (Ctrl+-)")
+        self.act_zoom_in = make_action("확대", self.viewer.zoom_in, QKeySequence.StandardKey.ZoomIn, "확대 (Ctrl++)")
+        self.act_fit_width = make_action("너비 맞춤", self.viewer.fit_to_width, tip="너비 맞춤")
+        self.act_fit_page = make_action("전체 맞춤", self.viewer.fit_to_page, tip="한 페이지 전체 맞춤")
 
         self.shortcut_find_next = QShortcut(QKeySequence("F3"), self)
         self.shortcut_find_next.activated.connect(self.find_next_result)
         self.shortcut_find_prev = QShortcut(QKeySequence("Shift+F3"), self)
         self.shortcut_find_prev.activated.connect(self.find_prev_result)
+        self.shortcut_exit_focus = QShortcut(QKeySequence("Esc"), self)
+        self.shortcut_exit_focus.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.shortcut_exit_focus.activated.connect(self._exit_focus_mode)
+        self.shortcut_exit_focus.setEnabled(False)
 
-        toolbar_main.addSeparator()
-
-        # 다크/라이트 테마 전환 액션
-        self.act_theme = QAction("테마 전환", self)
-        self.act_theme.setShortcut(QKeySequence("Ctrl+T"))
-        self.act_theme.setStatusTip("다크 모드 / 라이트 모드 전환 (Ctrl+T)")
-        self.act_theme.triggered.connect(self.toggle_theme)
-        toolbar_main.addAction(self.act_theme)
-
-        # 2. 실시간 PDF 편집 툴바 (2번째 줄 - 아이콘 전용)
-        self.addToolBarBreak()
-        toolbar_edit = QToolBar("PDF 편집 도구", self)
-        toolbar_edit.setIconSize(QSize(20, 20))
-        toolbar_edit.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        toolbar_edit.setMovable(False)
-        self.addToolBar(toolbar_edit)
-
+        # 편집 모드 (서로 배타적)
         mode_group = QActionGroup(self)
         mode_group.setExclusive(True)
 
-        self.act_mode_hand = QAction("이동/스크롤", self)
-        self.act_mode_hand.setCheckable(True)
+        def make_mode(text, mode, tip):
+            act = make_action(text, lambda: self._set_edit_mode(mode, text), tip=tip, checkable=True)
+            mode_group.addAction(act)
+            return act
+
+        self.act_mode_hand = make_mode("이동/스크롤", EditMode.HAND, "이동/스크롤 도구")
         self.act_mode_hand.setChecked(True)
-        self.act_mode_hand.setStatusTip("기본 연속 스크롤 및 마우스 드래그 이동")
-        self.act_mode_hand.setToolTip("이동/스크롤 도구")
-        self.act_mode_hand.triggered.connect(lambda: self._set_edit_mode(EditMode.HAND, "이동/스크롤"))
-        mode_group.addAction(self.act_mode_hand)
-        toolbar_edit.addAction(self.act_mode_hand)
+        self.act_mode_text = make_mode("텍스트 추가", EditMode.ADD_TEXT, "텍스트 추가 (클릭한 위치)")
+        self.act_mode_whiteout = make_mode("텍스트 삭제/가리기", EditMode.WHITEOUT, "텍스트 삭제/가리기 (드래그)")
+        self.act_mode_edit_text = make_mode("텍스트 수정", EditMode.EDIT_TEXT, "텍스트 수정 (드래그)")
+        self.act_mode_highlight = make_mode("형광펜", EditMode.HIGHLIGHT, "형광펜 (드래그)")
+        self.act_mode_pen = make_mode("손글씨/서명", EditMode.PEN, "손글씨/서명 (마우스로 그리기)")
 
-        toolbar_edit.addSeparator()
-
-        self.act_mode_text = QAction("텍스트 추가", self)
-        self.act_mode_text.setCheckable(True)
-        self.act_mode_text.setStatusTip("클릭한 위치에 텍스트 상자 삽입")
-        self.act_mode_text.setToolTip("텍스트 추가 도구 (클릭)")
-        self.act_mode_text.triggered.connect(lambda: self._set_edit_mode(EditMode.ADD_TEXT, "텍스트 추가 (클릭)"))
-        mode_group.addAction(self.act_mode_text)
-        toolbar_edit.addAction(self.act_mode_text)
-
-        self.act_mode_whiteout = QAction("텍스트 삭제/가리기", self)
-        self.act_mode_whiteout.setCheckable(True)
-        self.act_mode_whiteout.setStatusTip("지우고 싶은 영역을 마우스로 드래그하여 흰색으로 완전히 삭제/가리기")
-        self.act_mode_whiteout.setToolTip("텍스트 삭제/가리기 도구 (드래그)")
-        self.act_mode_whiteout.triggered.connect(lambda: self._set_edit_mode(EditMode.WHITEOUT, "텍스트 삭제/가리기 (드래그)"))
-        mode_group.addAction(self.act_mode_whiteout)
-        toolbar_edit.addAction(self.act_mode_whiteout)
-
-        self.act_mode_edit_text = QAction("텍스트 수정", self)
-        self.act_mode_edit_text.setCheckable(True)
-        self.act_mode_edit_text.setStatusTip("기존 텍스트 영역을 드래그하여 새 내용으로 치환/수정")
-        self.act_mode_edit_text.setToolTip("텍스트 수정 도구 (드래그)")
-        self.act_mode_edit_text.triggered.connect(lambda: self._set_edit_mode(EditMode.EDIT_TEXT, "텍스트 수정 (드래그)"))
-        mode_group.addAction(self.act_mode_edit_text)
-        toolbar_edit.addAction(self.act_mode_edit_text)
-
-        toolbar_edit.addSeparator()
-
-        self.act_mode_highlight = QAction("형광펜", self)
-        self.act_mode_highlight.setCheckable(True)
-        self.act_mode_highlight.setStatusTip("마우스로 드래그한 영역에 반투명 형광펜 칠하기")
-        self.act_mode_highlight.setToolTip("형광펜 도구 (드래그)")
-        self.act_mode_highlight.triggered.connect(lambda: self._set_edit_mode(EditMode.HIGHLIGHT, "형광펜 (드래그)"))
-        mode_group.addAction(self.act_mode_highlight)
-        toolbar_edit.addAction(self.act_mode_highlight)
-
-        self.act_mode_pen = QAction("손글씨/서명", self)
-        self.act_mode_pen.setCheckable(True)
-        self.act_mode_pen.setStatusTip("마우스로 자유형 서명 또는 메모 그리기")
-        self.act_mode_pen.setToolTip("손글씨/서명 도구 (마우스 드로잉)")
-        self.act_mode_pen.triggered.connect(lambda: self._set_edit_mode(EditMode.PEN, "손글씨/서명 (마우스 드로잉)"))
-        mode_group.addAction(self.act_mode_pen)
-        toolbar_edit.addAction(self.act_mode_pen)
-
-        toolbar_edit.addSeparator()
-
-        # 실행 취소 (Undo)
-        self.act_undo = QAction("실행 취소", self)
-        self.act_undo.setShortcut(QKeySequence.StandardKey.Undo)
+        self.act_undo = make_action("실행 취소", self._on_undo, QKeySequence.StandardKey.Undo, "실행 취소 (Ctrl+Z)")
         self.act_undo.setEnabled(False)
-        self.act_undo.setStatusTip("마지막 편집 취소 (Ctrl+Z)")
-        self.act_undo.setToolTip("실행 취소 (Ctrl+Z)")
-        self.act_undo.triggered.connect(self._on_undo)
-        toolbar_edit.addAction(self.act_undo)
-
-        # 메뉴바 구성
-        menubar = self.menuBar()
-
-        # [파일] 메뉴
-        menu_file = menubar.addMenu("파일(&F)")
-        menu_file.addAction(self.act_open)
-        menu_file.addAction(self.act_save)
-
-        act_save_as = QAction("다른 이름으로 저장...", self)
-        act_save_as.setShortcut(QKeySequence.StandardKey.SaveAs)
-        act_save_as.triggered.connect(self.save_as_file)
-        menu_file.addAction(act_save_as)
-        menu_file.addAction(self.act_remove_password)
-        menu_file.addAction(self.act_export_pages)
-
-        menu_file.addSeparator()
-        menu_file.addAction(self.act_print)
-
-        act_print_prev = QAction("인쇄 미리보기...", self)
-        act_print_prev.setStatusTip("인쇄 미리보기 창 열기")
-        act_print_prev.triggered.connect(self.print_preview)
-        menu_file.addAction(act_print_prev)
-
-        menu_file.addSeparator()
-        menu_file.addAction(self.act_img_merge)
-        menu_file.addSeparator()
-
-        act_exit = QAction("종료(&X)", self)
-        act_exit.setShortcut(QKeySequence.StandardKey.Quit)
-        act_exit.triggered.connect(self.close)
-        menu_file.addAction(act_exit)
-
-        # [편집] 메뉴
-        menu_edit = menubar.addMenu("편집(&E)")
-        menu_edit.addAction(self.act_undo)
-        menu_edit.addAction(self.act_find)
-        menu_edit.addSeparator()
-        menu_edit.addAction(self.act_mode_hand)
-        menu_edit.addAction(self.act_mode_text)
-        menu_edit.addAction(self.act_mode_whiteout)
-        menu_edit.addAction(self.act_mode_edit_text)
-        menu_edit.addAction(self.act_mode_highlight)
-        menu_edit.addAction(self.act_mode_pen)
-        menu_edit.addSeparator()
-        menu_edit.addAction(self.act_reorder)
-
-        # [페이지] 메뉴
-        menu_page = menubar.addMenu("페이지(&P)")
-        menu_page.addAction(self.act_reorder)
-        menu_page.addAction(self.act_export_pages)
-
-        # [보기] 메뉴
-        menu_view = menubar.addMenu("보기(&V)")
-        menu_view.addAction(self.act_sidebar)
-        menu_view.addAction(self.act_theme)
-        menu_view.addSeparator()
-        menu_view.addAction(self.act_zoom_in)
-        menu_view.addAction(self.act_zoom_out)
-        menu_view.addAction(self.act_fit_width)
-        menu_view.addAction(self.act_fit_page)
-
-        # [도움말] 메뉴 (자동 업데이트 & 정보)
-        menu_help = menubar.addMenu("도움말(&H)")
 
         act_check_update = QAction("업데이트 확인...", self)
-        act_check_update.setStatusTip("최신 버전 출시 여부 확인 및 자동 업데이트")
         act_check_update.triggered.connect(self.check_for_updates_interactive)
-        menu_help.addAction(act_check_update)
-
-        menu_help.addSeparator()
-
         act_github = QAction("GitHub 저장소 방문...", self)
-        act_github.setStatusTip(f"GitHub 프로젝트 페이지 열기 ({GITHUB_REPO_URL})")
         act_github.triggered.connect(self.open_github_repo)
-        menu_help.addAction(act_github)
-
-        menu_help.addSeparator()
-
         act_about = QAction("BossPDF 정보...", self)
-        act_about.setStatusTip("BossPDF 버전 및 소프트웨어 정보")
         act_about.triggered.connect(self.show_about_dialog)
-        menu_help.addAction(act_about)
+
+        # ---------- ☰ 메뉴 (기존 메뉴바 대체) ----------
+        self.main_menu = QMenu(self)
+        for act in (self.act_open, self.act_save, self.act_save_as, self.act_remove_password):
+            self.main_menu.addAction(act)
+        self.main_menu.addSeparator()
+        for act in (self.act_export_pages, self.act_print, self.act_print_preview):
+            self.main_menu.addAction(act)
+        self.main_menu.addSeparator()
+        self.main_menu.addAction(self.act_reorder)
+        self.main_menu.addAction(self.act_img_merge)
+        self.main_menu.addSeparator()
+        menu_view = self.main_menu.addMenu("보기")
+        for act in (self.act_sidebar, self.act_fullscreen, self.act_theme):
+            menu_view.addAction(act)
+        menu_view.addSeparator()
+        for act in (self.act_zoom_in, self.act_zoom_out, self.act_fit_width, self.act_fit_page):
+            menu_view.addAction(act)
+        menu_help = self.main_menu.addMenu("도움말")
+        for act in (act_check_update, act_github, act_about):
+            menu_help.addAction(act)
+        self.main_menu.addSeparator()
+        self.main_menu.addAction(self.act_exit)
+
+        # ---------- 왼쪽 세로 레일 ----------
+        self.rail = QToolBar("도구", self)
+        self.rail.setObjectName("sideRail")
+        self.rail.setOrientation(Qt.Orientation.Vertical)
+        self.rail.setIconSize(QSize(20, 20))
+        self.rail.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.rail.setMovable(False)
+        self.rail.setFloatable(False)
+        self.rail.toggleViewAction().setVisible(False)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.rail)
+
+        self.btn_main_menu = QToolButton(self.rail)
+        self.btn_main_menu.setObjectName("railMenuButton")
+        self.btn_main_menu.setToolTip("메뉴")
+        self.btn_main_menu.setMenu(self.main_menu)
+        self.btn_main_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_main_menu.setIconSize(QSize(20, 20))
+        self.rail.addWidget(self.btn_main_menu)
+        self.rail.addAction(self.act_sidebar)
+        self.rail.addSeparator()
+        self.rail.addAction(self.act_open)
+        self.rail.addAction(self.act_save)
+        self.rail.addSeparator()
+        for act in (self.act_mode_hand, self.act_mode_text, self.act_mode_whiteout,
+                    self.act_mode_edit_text, self.act_mode_highlight, self.act_mode_pen):
+            self.rail.addAction(act)
+        self.rail.addSeparator()
+        self.rail.addAction(self.act_undo)
+        self.rail.addAction(self.act_find)
+        rail_spacer = QWidget(self.rail)
+        rail_spacer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.rail.addWidget(rail_spacer)
+        self.rail.addAction(self.act_theme)
+
+        # ---------- 문서 위 플로팅 바 (페이지 이동·줌) ----------
+        self.floating_bar = FloatingBar(self.viewer)
+
+        def bar_button(action):
+            btn = QToolButton(self.floating_bar)
+            btn.setDefaultAction(action)
+            btn.setIconSize(QSize(18, 18))
+            btn.setAutoRaise(True)
+            return btn
+
+        self.btn_prev_page = QPushButton(self.floating_bar)
+        self.btn_prev_page.setToolTip("이전 페이지")
+        self.btn_prev_page.setFixedSize(26, 24)
+        self.btn_prev_page.clicked.connect(self._on_prev_page)
+        self.txt_page = QLineEdit("1", self.floating_bar)
+        self.txt_page.setFixedWidth(40)
+        self.txt_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.txt_page.returnPressed.connect(self._on_jump_page)
+        self.lbl_total_page = QLabel("/ 0", self.floating_bar)
+        self.lbl_total_page.setStyleSheet("color: #86868B; font-weight: 500; padding: 0 4px;")
+        self.btn_next_page = QPushButton(self.floating_bar)
+        self.btn_next_page.setToolTip("다음 페이지")
+        self.btn_next_page.setFixedSize(26, 24)
+        self.btn_next_page.clicked.connect(self._on_next_page)
+
+        self.combo_zoom = QComboBox(self.floating_bar)
+        self.combo_zoom.addItems(["50%", "75%", "100%", "120%", "150%", "200%"])
+        self.combo_zoom.setCurrentText("120%")
+        self.combo_zoom.setFixedWidth(78)
+        self.combo_zoom.currentTextChanged.connect(self._on_combo_zoom_changed)
+
+        for w in (self.btn_prev_page, self.txt_page, self.lbl_total_page, self.btn_next_page):
+            self.floating_bar.add_widget(w)
+        self.floating_bar.add_separator()
+        self.floating_bar.add_widget(bar_button(self.act_zoom_out))
+        self.floating_bar.add_widget(self.combo_zoom)
+        self.floating_bar.add_widget(bar_button(self.act_zoom_in))
+        self.floating_bar.add_widget(bar_button(self.act_fit_width))
+        self.floating_bar.add_widget(bar_button(self.act_fit_page))
+        self.floating_bar.add_separator()
+        self.floating_bar.add_widget(bar_button(self.act_fullscreen))
+
+        # 상태 표시줄 대신 문서 위 알림
+        self.status_bar = ToastLabel(self.viewer)
+        self.viewer.installEventFilter(self)
+        QTimer.singleShot(0, self._reposition_overlays)
+
+    def _reposition_overlays(self):
+        if hasattr(self, "floating_bar"):
+            self.floating_bar.reposition()
+            self.status_bar.reposition()
+
+    # ==================== 집중 모드 (F11) ====================
+
+    def toggle_focus_mode(self):
+        entering = not getattr(self, "_focus_mode", False)
+        self._focus_mode = entering
+        self.act_fullscreen.setChecked(entering)
+        self.shortcut_exit_focus.setEnabled(entering)
+        if entering:
+            self._focus_restore = {
+                "maximized": self.isMaximized(),
+                "sidebar": self.dock_thumb.isVisible(),
+            }
+            self.rail.setVisible(False)
+            self.dock_thumb.blockSignals(True)
+            self.dock_thumb.setVisible(False)
+            self.dock_thumb.blockSignals(False)
+            self.showFullScreen()
+            self.status_bar.showMessage("집중 모드입니다. Esc나 F11을 누르면 돌아갑니다.", 2500)
+        else:
+            state = getattr(self, "_focus_restore", {"maximized": False, "sidebar": True})
+            if state["maximized"]:
+                self.showMaximized()
+            else:
+                self.showNormal()
+            self.rail.setVisible(True)
+            self.dock_thumb.blockSignals(True)
+            self.dock_thumb.setVisible(state["sidebar"])
+            self.dock_thumb.blockSignals(False)
+            self.act_sidebar.setChecked(state["sidebar"])
+        QTimer.singleShot(0, self._reposition_overlays)
+
+    def _exit_focus_mode(self):
+        if getattr(self, "_focus_mode", False):
+            self.toggle_focus_mode()
 
     # ==================== 사이드바 및 테마 제어 ====================
 
@@ -585,6 +509,10 @@ class MainWindow(QMainWindow):
         """다크 모드 <-> 라이트 모드 상호 전환"""
         new_theme = AppleTheme.DARK if self.current_theme == AppleTheme.LIGHT else AppleTheme.LIGHT
         self.apply_theme(new_theme)
+        # 같은 프로세스의 다른 문서 창도 함께 전환
+        for w in MainWindow._windows:
+            if w is not self:
+                w.apply_theme(new_theme)
 
     def apply_theme(self, theme_mode: str):
         """전체 애플리케이션에 다크/라이트 테마 및 SVG 아이콘 팔레트 일괄 적용"""
@@ -667,7 +595,9 @@ class MainWindow(QMainWindow):
         is_dark = (self.current_theme == AppleTheme.DARK)
 
         # 메인 툴바
+        self.btn_main_menu.setIcon(get_icon("menu", is_dark=is_dark))
         self.act_sidebar.setIcon(get_icon("sidebar", is_dark=is_dark))
+        self.act_fullscreen.setIcon(get_icon("fullscreen", is_dark=is_dark, size=18))
         self.act_open.setIcon(get_icon("open", is_dark=is_dark))
         self.act_save.setIcon(get_icon("save", is_dark=is_dark))
         self.act_remove_password.setIcon(get_icon("unlock", is_dark=is_dark))
@@ -705,7 +635,6 @@ class MainWindow(QMainWindow):
 
     def _set_edit_mode(self, mode: EditMode, mode_name: str):
         self.viewer.set_mode(mode)
-        self.lbl_status_mode.setText(f"모드: {mode_name}")
 
     def _on_undo(self):
         if self.pdf_engine.undo():
@@ -757,7 +686,6 @@ class MainWindow(QMainWindow):
             self.thumbnail_widget.load_thumbnails(self.pdf_engine)
             self._update_title()
             self._update_security_status()
-            self.lbl_status_file.setText(f"문서: {os.path.basename(file_path)} ({self.pdf_engine.page_count} 페이지)")
             self.lbl_total_page.setText(f"/ {self.pdf_engine.page_count}  ")
             self.txt_page.setText("1")
             self.act_undo.setEnabled(False)
@@ -771,19 +699,16 @@ class MainWindow(QMainWindow):
                 self._update_search_status_ui(0, 0, False)
 
             if self.pdf_engine.was_encrypted:
-                self.status_bar.showMessage("암호가 인증되어 문서가 열렸습니다. [비밀번호 해제 후 저장]을 통해 암호를 영구 제거할 수 있습니다.", 6000)
+                self.status_bar.showMessage("암호가 인증되어 문서가 열렸습니다. ☰ 메뉴의 [비밀번호 해제 후 저장]으로 암호를 영구 제거할 수 있습니다.", 6000)
         except Exception as e:
             QMessageBox.critical(self, "열기 오류", f"PDF 파일을 여는 중 오류가 발생했습니다:\n{str(e)}")
 
     def _update_security_status(self):
         """현재 문서의 암호화 상태를 확인하고 UI 요소를 갱신"""
         if self.pdf_engine.is_loaded() and self.pdf_engine.was_encrypted:
-            self.lbl_status_security.setText("🔒 암호 보호됨 (해제 가능)")
-            self.lbl_status_security.setVisible(True)
             self.act_remove_password.setEnabled(True)
             self.act_remove_password.setVisible(True)
         else:
-            self.lbl_status_security.setVisible(False)
             self.act_remove_password.setEnabled(False)
             self.act_remove_password.setVisible(False)
 
@@ -887,7 +812,6 @@ class MainWindow(QMainWindow):
                 AppSettings.set_last_save_dir(file_path)
                 self._update_title()
                 self._update_security_status()
-                self.lbl_status_file.setText(f"문서: {os.path.basename(file_path)} ({self.pdf_engine.page_count} 페이지)")
                 if remove_password:
                     self.status_bar.showMessage(f"비밀번호가 해제되어 저장되었습니다: {os.path.basename(file_path)}", 4000)
                 else:
@@ -902,12 +826,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "안내", "먼저 PDF 문서를 열어주세요.")
             return
 
+        from ui.page_export_dialog import PageExportDialog  # 쓸 때만 로드 (시작 속도)
         dlg = PageExportDialog(self.pdf_engine, parent=self)
         dlg.exec()
 
     def print_document(self):
         if not self.pdf_engine.is_loaded():
             return
+        from PySide6.QtPrintSupport import QPrinter, QPrintDialog  # 인쇄할 때만 로드
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         dlg = QPrintDialog(printer, self)
         if dlg.exec() == QPrintDialog.DialogCode.Accepted:
@@ -916,12 +842,13 @@ class MainWindow(QMainWindow):
     def print_preview(self):
         if not self.pdf_engine.is_loaded():
             return
+        from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         preview = QPrintPreviewDialog(printer, self)
         preview.paintRequested.connect(self._do_print)
         preview.exec()
 
-    def _render_print_pages(self, printer: QPrinter):
+    def _render_print_pages(self, printer):
         painter = QPainter(printer)
         for i in range(self.pdf_engine.page_count):
             if i > 0:
@@ -931,10 +858,11 @@ class MainWindow(QMainWindow):
             painter.drawImage(target_rect, qimg)
         painter.end()
 
-    def _do_print(self, printer: QPrinter):
+    def _do_print(self, printer):
         self._render_print_pages(printer)
 
     def open_image_merge_dialog(self):
+        from ui.image_merge_dialog import ImageMergeDialog
         dlg = ImageMergeDialog(parent=self)
         if dlg.exec():
             merged_pdf_path = dlg.get_output_pdf_path()
@@ -944,12 +872,12 @@ class MainWindow(QMainWindow):
     def open_page_reorder_dialog(self):
         if not self.pdf_engine.is_loaded():
             return
+        from ui.page_reorder_dialog import PageReorderDialog
         dlg = PageReorderDialog(self.pdf_engine, parent=self)
         if dlg.exec():
             self.viewer.render_all_pages()
             self.thumbnail_widget.load_thumbnails(self.pdf_engine)
             self._update_title()
-            self.lbl_status_file.setText(f"문서: {os.path.basename(self.pdf_engine.file_path or '새 문서')} ({self.pdf_engine.page_count} 페이지)")
             self.lbl_total_page.setText(f"/ {self.pdf_engine.page_count}  ")
             self.status_bar.showMessage("페이지 순서가 업데이트되었습니다.", 4000)
 
@@ -1000,7 +928,6 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, zoom: float):
         pct = int(zoom * 100)
-        self.lbl_status_zoom.setText(f"{pct}%")
         self.combo_zoom.blockSignals(True)
         self.combo_zoom.setCurrentText(f"{pct}%")
         self.combo_zoom.blockSignals(False)
@@ -1037,7 +964,9 @@ class MainWindow(QMainWindow):
         self._update_search_status_ui(0, 0, False)
 
     def eventFilter(self, obj, event):
-        """검색창에서 Enter, Shift+Enter, Esc 키 가로채기"""
+        """검색창 키 처리 + 뷰어 크기 변경 시 플로팅 바/알림 위치 갱신"""
+        if obj is getattr(self, "viewer", None) and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self._reposition_overlays)
         if obj == self.txt_search and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             mods = event.modifiers()
@@ -1150,15 +1079,23 @@ class MainWindow(QMainWindow):
 
     def _check_updates_background(self):
         """앱 시작 후 백그라운드에서 최신 버전 출시 여부 비동기 확인"""
-        self._bg_update_thread = CheckUpdateThread(current_version=__version__, parent=self)
-        self._bg_update_thread.check_finished.connect(self._on_bg_update_checked)
-        self._bg_update_thread.start()
+        # 창이 먼저 닫혀도 스레드가 함께 파괴되지 않도록 부모 없이 클래스에 보관
+        thread = CheckUpdateThread(current_version=__version__)
+        thread.check_finished.connect(MainWindow._on_bg_update_checked)
+        MainWindow._bg_update_thread = thread
+        thread.start()
 
-    def _on_bg_update_checked(self, info: UpdateInfo):
-        if info and info.has_update:
-            self.status_bar.showMessage(
-                f"새로운 BossPDF v{info.latest_version} 버전이 출시되었습니다! [도움말 > 업데이트 확인]", 12000
-            )
+    @classmethod
+    def _on_bg_update_checked(cls, info: UpdateInfo):
+        if not (info and info.has_update):
+            return
+        live = [w for w in cls._windows if w.isVisible()]
+        if not live:
+            return
+        owner = next((w for w in live if w.isActiveWindow()), live[-1])
+        owner.status_bar.showMessage(f"새 버전 v{info.latest_version}이 나왔습니다.", 5000)
+        from ui.update_dialog import UpdateDialog
+        UpdateDialog(owner, update_info=info).exec()
 
     def check_for_updates_interactive(self):
         """도움말 메뉴에서 수동으로 업데이트 확인 클릭 시 실행"""
@@ -1169,6 +1106,7 @@ class MainWindow(QMainWindow):
 
     def _on_manual_update_checked(self, info: UpdateInfo):
         if info and info.has_update:
+            from ui.update_dialog import UpdateDialog
             dlg = UpdateDialog(self, update_info=info)
             dlg.exec()
         elif info and info.error_message:
@@ -1181,7 +1119,7 @@ class MainWindow(QMainWindow):
                 f"• 상태 안내: {info.error_message}\n\n" +
                 "※ GitHub Releases에 신규 버전(Setup.exe)이 등록되면 앱 시작 시 자동 감지 및 원클릭 업데이트가 지원됩니다."
             )
-            btn_ok = msg_box.addButton("확인", QMessageBox.ButtonRole.AcceptRole)
+            msg_box.addButton("확인", QMessageBox.ButtonRole.AcceptRole)
             btn_repo = msg_box.addButton("GitHub 저장소 방문", QMessageBox.ButtonRole.ActionRole)
             msg_box.exec()
             if msg_box.clickedButton() == btn_repo:

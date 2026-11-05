@@ -1,18 +1,15 @@
 """
 Apple macOS 감성의 자동 업데이트 알림 및 다운로더 대화상자
 """
-import os
 from typing import Optional
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QTextBrowser, QFrame, QMessageBox, QApplication
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 
 from core.updater import UpdateInfo, DownloadUpdateThread, launch_installer_and_exit
 from core.version import __version__
-from ui.theme import AppleTheme
 
 
 class UpdateDialog(QDialog):

@@ -2,11 +2,8 @@
 GitHub Releases 기반 BossPDF 자동 업데이트 모듈
 """
 import os
-import sys
 import re
 import tempfile
-import urllib.request
-import urllib.error
 import json
 import subprocess
 from dataclasses import dataclass
@@ -65,6 +62,8 @@ def check_github_update(
     timeout: int = 6
 ) -> UpdateInfo:
     """GitHub API를 통해 최신 릴리스 정보 확인 (릴리스 미발행 시 main 브랜치 정상 상태 확인)"""
+    import urllib.request  # 시작 속도를 위해 실제 확인 시점에 로드
+    import urllib.error
     api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     req = urllib.request.Request(
         api_url,
@@ -202,6 +201,7 @@ class DownloadUpdateThread(QThread):
             return
 
         try:
+            import urllib.request
             temp_dir = tempfile.gettempdir()
             dest_path = os.path.join(temp_dir, self.file_name or "BossPDF_Setup_Latest.exe")
 

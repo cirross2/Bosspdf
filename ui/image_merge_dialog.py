@@ -6,11 +6,10 @@ from typing import List, Optional
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget,
     QListWidgetItem, QLabel, QFileDialog, QRadioButton, QButtonGroup,
-    QComboBox, QProgressBar, QMessageBox, QAbstractItemView, QWidget,
-    QFrame
+    QComboBox, QProgressBar, QMessageBox, QAbstractItemView, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QIcon, QPixmap, QImageReader
+from PySide6.QtGui import QIcon, QPixmap
 
 from core.image_to_pdf import ImageToPdfConverter
 from core.settings_manager import AppSettings

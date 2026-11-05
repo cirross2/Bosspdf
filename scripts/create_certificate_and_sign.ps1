@@ -6,7 +6,7 @@ $resDir = Join-Path $rootDir "resources"
 $distDir = Join-Path $rootDir "dist"
 
 $versionFile = Join-Path $rootDir "core\version.py"
-$appVersion = "1.0.3"
+$appVersion = "1.0.4"
 if (Test-Path $versionFile) {
     $verMatch = Select-String -Path $versionFile -Pattern '__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
     if ($verMatch -and $verMatch.Matches.Count -gt 0) {

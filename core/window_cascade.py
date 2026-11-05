@@ -82,6 +82,27 @@ def other_window_positions(exclude_hwnd: int = 0):
     return found
 
 
+def marked_windows():
+    """BossPDF 메인 창 HWND 목록 (최소화 포함, 화면 Z-order 위쪽부터)"""
+    if not _IS_WINDOWS:
+        return []
+    found = []
+
+    def _cb(hwnd, _lparam):
+        try:
+            if _user32.GetPropW(hwnd, PROP_MARK) and _user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+        except Exception:
+            pass
+        return True
+
+    try:
+        _user32.EnumWindows(_EnumProc(_cb), 0)
+    except Exception:
+        return []
+    return found
+
+
 def find_free_position(x: int, y: int, occupied, bounds=None):
     """
     (x, y)에 이미 창이 있으면 오른쪽 아래로 CASCADE_STEP씩 비켜 빈 자리를 찾습니다.

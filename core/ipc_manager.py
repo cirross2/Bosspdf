@@ -4,7 +4,6 @@
 윈도우 네이티브 뮤텍스(Named Mutex) & 큐 매니저
 """
 import os
-import sys
 import time
 import tempfile
 import ctypes

@@ -4,12 +4,10 @@ PDF 문서 로드, 렌더링, 페이지 조작 및 텍스트/마크업 편집 �
 """
 import os
 import math
-import asyncio
 import unicodedata
 from typing import Optional, List, Tuple, Dict, Any
 import pymupdf as fitz  # PyMuPDF
 from PySide6.QtGui import QImage, QPixmap
-from PIL import Image
 from core.font_manager import FontManager
 
 
@@ -226,7 +224,6 @@ class PdfEngine:
             for line in b["lines"]:
                 line_bbox = line["bbox"]  # (x0, y0, x1, y1)
                 # 라인 중심까지 거리 계산
-                mid_x = (line_bbox[0] + line_bbox[2]) / 2.0
                 mid_y = (line_bbox[1] + line_bbox[3]) / 2.0
                 dist = math.hypot(target_x - line_bbox[0], target_y - mid_y)
 
@@ -269,7 +266,6 @@ class PdfEngine:
 
             # 폰트 크기 감지
             detected_size = round(best_span.get("size", 12.0), 1)
-            detected_font = best_span.get("font", "맑은 고딕")
 
             result.update({
                 "found": True,
@@ -525,6 +521,7 @@ class PdfEngine:
             filepath = os.path.join(output_dir, filename)
 
             if fmt_clean in ["jpg", "jpeg"]:
+                from PIL import Image
                 im = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 im.save(filepath, "JPEG", quality=95)
             else:
@@ -554,6 +551,8 @@ class PdfEngine:
         valid_indices = [idx for idx in page_indices if 0 <= idx < self.page_count]
         if not valid_indices:
             raise ValueError("유효한 페이지 번호가 없습니다.")
+
+        from PIL import Image
 
         images = []
         for idx in valid_indices:
@@ -727,6 +726,7 @@ class PdfEngine:
                     return await engine.recognize_async(sb)
 
                 try:
+                    import asyncio
                     loop = asyncio.new_event_loop()
                     try:
                         res = loop.run_until_complete(_run_winrt_ocr())

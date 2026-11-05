@@ -1,13 +1,13 @@
 """
 페이지 순서 변경, 삭제, 회전을 한눈에 관리하는 페이지 정렬 대화상자
 """
-from typing import List, Optional
+from typing import List
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget,
     QListWidgetItem, QLabel, QMessageBox, QAbstractItemView, QFrame
 )
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon
 
 from core.pdf_engine import PdfEngine
 from ui.theme import AppleTheme
