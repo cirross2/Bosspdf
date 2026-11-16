@@ -55,6 +55,38 @@ fn with_app(f: impl FnOnce(&Rc<App>)) {
     }
 }
 
+/// 창 크기에 배율을 맞추는 방식
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Fit {
+    /// 맞추지 않음 (사용자가 정한 배율 유지)
+    #[default]
+    None,
+    /// 가장 넓은 쪽이 창 너비에 꽉 차게
+    Width,
+    /// 한 쪽 전체가 창 안에 다 보이게 (위아래·좌우 모두)
+    Page,
+}
+
+/// 지금의 맞춤 방식에서 창 크기에 맞는 배율. 맞추지 않는 상태거나 창 크기를 아직 모르면 None
+fn fit_zoom(st: &State, view_w: f32, view_h: f32) -> Option<f32> {
+    if st.sizes.is_empty() || view_w <= 80.0 {
+        return None;
+    }
+    let avail_w = view_w - 2.0 * MARGIN - SCROLLBAR;
+    let zoom = match st.fit {
+        Fit::None => return None,
+        Fit::Width => avail_w / st.sizes.iter().map(|s| s.0).fold(1.0, f32::max),
+        Fit::Page => {
+            if view_h <= 80.0 {
+                return None;
+            }
+            let (w, h) = st.sizes[st.fit_page.min(st.sizes.len() - 1)];
+            (avail_w / w).min((view_h - 2.0 * PAGE_GAP) / h)
+        }
+    };
+    Some(zoom.clamp(ZOOM_MIN, ZOOM_MAX))
+}
+
 #[derive(Default)]
 struct State {
     doc_id: u64,
@@ -64,7 +96,9 @@ struct State {
     sizes: Vec<(f32, f32)>,
     /// 1pt당 논리 픽셀
     zoom: f32,
-    fit_width: bool,
+    fit: Fit,
+    /// '쪽 맞춤'의 기준이 되는 쪽 (쪽마다 크기가 달라도 스크롤할 때 배율이 흔들리지 않게 고정해 둔다)
+    fit_page: usize,
     ys: Vec<f32>,
     content_w: f32,
     content_h: f32,
@@ -190,7 +224,7 @@ impl App {
                 return;
             }
             let keep_id = st.doc_id;
-            *st = State { doc_id: keep_id, path: path.clone(), sizes, fit_width: true, zoom: PX_PER_PT, ..State::default() };
+            *st = State { doc_id: keep_id, path: path.clone(), sizes, fit: Fit::Page, fit_page: 0, zoom: PX_PER_PT, ..State::default() };
 
             layout_thumbs(&mut st);
         }
@@ -267,8 +301,8 @@ impl App {
                 return;
             }
             let max_w_pt = st.sizes.iter().map(|s| s.0).fold(1.0, f32::max);
-            if st.fit_width && view_w > 80.0 {
-                st.zoom = ((view_w - 2.0 * MARGIN - SCROLLBAR) / max_w_pt).clamp(ZOOM_MIN, ZOOM_MAX);
+            if let Some(fitted) = fit_zoom(&st, view_w, view_h) {
+                st.zoom = fitted;
             }
             let zoom = st.zoom;
             let mut y = PAGE_GAP;
@@ -311,6 +345,7 @@ impl App {
         Some((page, (top - st.ys[page]) / h.max(1.0)))
     }
 
+    /// zoom이 Some이면 그 배율로 고정, None이면 너비 맞춤
     fn set_zoom(&self, zoom: Option<f32>) {
         let anchor = self.top_anchor();
         {
@@ -321,12 +356,27 @@ impl App {
             match zoom {
                 Some(z) => {
                     st.zoom = z.clamp(ZOOM_MIN, ZOOM_MAX);
-                    st.fit_width = false;
+                    st.fit = Fit::None;
                 }
-                None => st.fit_width = true,
+                None => st.fit = Fit::Width,
             }
         }
         self.relayout(anchor);
+    }
+
+    /// 지금 보고 있는 쪽 전체가 창 안에 다 보이게 맞춘다
+    fn fit_page(&self) {
+        let page = {
+            let mut st = self.st.borrow_mut();
+            if st.sizes.is_empty() {
+                return;
+            }
+            st.fit = Fit::Page;
+            st.fit_page = st.current_page.min(st.sizes.len() - 1);
+            st.fit_page
+        };
+        self.relayout(None);
+        self.goto_page(page);
     }
 
     fn zoom_by(&self, factor: f32) {
@@ -343,17 +393,16 @@ impl App {
         let top = -ui.get_scroll_y();
         let device_scale = ui.window().scale_factor().max(0.5);
 
-        // 창 너비가 바뀌었는데 '너비 맞춤' 상태면 배치를 다시 계산
+        // 창 크기가 바뀌었는데 '맞춤' 상태면 배치를 다시 계산
         let needs_fit = {
             let st = self.st.borrow();
             if st.sizes.is_empty() {
                 return;
             }
             let max_w_pt = st.sizes.iter().map(|s| s.0).fold(1.0, f32::max);
-            let fit_zoom = ((view_w - 2.0 * MARGIN - SCROLLBAR) / max_w_pt).clamp(ZOOM_MIN, ZOOM_MAX);
+            let refit = fit_zoom(&st, view_w, view_h).map(|z| (z - st.zoom).abs() > 0.001).unwrap_or(false);
             let wanted_content_w = (max_w_pt * st.zoom + 2.0 * MARGIN).max(view_w - SCROLLBAR);
-            view_w > 80.0
-                && ((st.fit_width && (fit_zoom - st.zoom).abs() > 0.001) || (wanted_content_w - st.content_w).abs() > 0.5)
+            view_w > 80.0 && (refit || (wanted_content_w - st.content_w).abs() > 0.5)
         };
         if needs_fit {
             let anchor = self.top_anchor();
@@ -1951,6 +2000,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_zoom_in(|| with_app(|app| app.zoom_by(ZOOM_STEP)));
     ui.on_zoom_out(|| with_app(|app| app.zoom_by(1.0 / ZOOM_STEP)));
     ui.on_zoom_fit(|| with_app(|app| app.set_zoom(None)));
+    ui.on_zoom_fit_page(|| with_app(|app| app.fit_page()));
     ui.on_search_edited(|text| with_app(|app| app.start_search(text.as_str())));
     ui.on_search_next(|| with_app(|app| app.step_hit(1)));
     ui.on_search_prev(|| with_app(|app| app.step_hit(-1)));
@@ -1988,6 +2038,17 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_thumb_drag(|page, y| with_app(|app| app.thumb_drag(page.max(0) as usize, y)));
     ui.on_thumb_drop(|| with_app(|app| app.thumb_drop()));
     ui.on_print(|| with_app(|app| app.print_from_ui()));
+    ui.on_quit(|| {
+        with_app(|app| {
+            // 창 닫기와 같은 길을 탄다: 저장하지 않은 변경이 있으면 묻는다
+            if matches!(app.on_close_requested(), slint::CloseRequestResponse::HideWindow) {
+                let _ = slint::quit_event_loop();
+            }
+        })
+    });
+    ui.on_open_github(|| {
+        let _ = std::process::Command::new("explorer.exe").arg("https://github.com/cirross2/Bosspdf").spawn();
+    });
     ui.on_export_run(|| with_app(|app| app.export_from_ui()));
     ui.on_merge_add(|| with_app(|app| app.merge_pick_files()));
     ui.on_merge_remove(|index| with_app(|app| app.merge_remove(index.max(0) as usize)));

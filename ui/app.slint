@@ -57,15 +57,40 @@ export global Theme {
     out property <color> floating-bg: dark ? #3A3A3CF2 : #1D1D1FE6;
 }
 
+// 지금 보여 줄 툴팁. 단추에 마우스를 올리면 그 단추가 글자와 위치를 여기에 적는다.
+global Tip {
+    in-out property <string> text: "";
+    // 툴팁을 붙일 기준점 (창 좌표)
+    in-out property <length> x: 0px;
+    in-out property <length> y: 0px;
+    // true면 단추 아래 가운데, false면 단추 오른쪽에 띄운다
+    in-out property <bool> below: false;
+}
+
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <bool> active: false;
     in property <bool> enabled: true;
     in property <color> tint: Theme.text-primary;
+    // 마우스를 올리면 바로 뜨는 설명 (비우면 안 뜸)
+    in property <string> tip: "";
+    in property <bool> tip-below: false;
     callback clicked();
 
+    property <bool> hovered: touch.has-hover;
+    changed hovered => {
+        if (self.hovered && root.tip != "") {
+            Tip.below = root.tip-below;
+            Tip.x = root.tip-below ? root.absolute-position.x + root.width / 2 : root.absolute-position.x + root.width + 8px;
+            Tip.y = root.tip-below ? root.absolute-position.y + root.height + 6px : root.absolute-position.y + root.height / 2;
+            Tip.text = root.tip;
+        } else if (Tip.text == root.tip) {
+            Tip.text = "";
+        }
+    }
+
     width: 36px;
-    height: 30px;
+    height: 29px;
     border-radius: 7px;
     background: root.active ? Theme.accent-tint : (touch.has-hover && root.enabled ? Theme.hover : transparent);
     opacity: root.enabled ? 1 : 0.35;
@@ -78,9 +103,12 @@ component IconButton inherits Rectangle {
     }
 
     touch := TouchArea {
-        enabled: root.enabled;
+        // 꺼진 단추도 설명은 볼 수 있게 마우스는 받고, 누르는 것만 막는다
         clicked => {
-            root.clicked();
+            Tip.text = "";
+            if (root.enabled) {
+                root.clicked();
+            }
         }
     }
 }
@@ -247,6 +275,7 @@ export component AppWindow inherits Window {
     callback zoom-in();
     callback zoom-out();
     callback zoom-fit();
+    callback zoom-fit-page();
     callback search-edited(text: string);
     callback search-next();
     callback search-prev();
@@ -288,6 +317,8 @@ export component AppWindow inherits Window {
 
     callback export-run();
     callback print();
+    callback quit();
+    callback open-github();
 
     // 합치기 창
     in-out property <bool> merge-open: false;
@@ -361,6 +392,15 @@ export component AppWindow inherits Window {
         if (root.text-tool) {
             root.need-fonts();
         }
+    }
+
+    // ☰ 메뉴를 단추 오른쪽에 펼친다
+    public function show-main-menu() {
+        menu-area.show({ x: 42px, y: 0px });
+    }
+
+    public function close-main-menu() {
+        menu-area.close();
     }
 
     public function open-search() {
@@ -444,6 +484,10 @@ export component AppWindow inherits Window {
                     return accept;
                 }
                 if (event.text == "0") {
+                    root.zoom-fit-page();
+                    return accept;
+                }
+                if (event.text == "9") {
                     root.zoom-fit();
                     return accept;
                 }
@@ -514,15 +558,171 @@ export component AppWindow inherits Window {
                     padding-left: 5px;
                     spacing: 3px;
 
-                    IconButton {
-                        icon: @image-url("icons/menu.svg");
-                        clicked => {
-                            root.info-open = true;
+                    // ☰ 메뉴 (누르면 오른쪽으로 펼쳐진다)
+                    menu-area := ContextMenuArea {
+                        width: 36px;
+                        height: 29px;
+
+                        Menu {
+                            MenuItem {
+                                title: "열기…  (Ctrl+O)";
+                                activated => {
+                                    root.open-clicked();
+                                }
+                            }
+
+                            MenuItem {
+                                title: "저장  (Ctrl+S)";
+                                enabled: root.has-doc && root.dirty;
+                                activated => {
+                                    root.save();
+                                }
+                            }
+
+                            MenuItem {
+                                title: "다른 이름으로 저장…  (Ctrl+Shift+S)";
+                                enabled: root.has-doc;
+                                activated => {
+                                    root.save-as();
+                                }
+                            }
+
+                            MenuItem {
+                                title: "암호 없이 저장…";
+                                enabled: root.has-doc && root.doc-encrypted;
+                                activated => {
+                                    root.save-unlocked();
+                                }
+                            }
+
+                            MenuSeparator { }
+
+                            MenuItem {
+                                title: "페이지 내보내기…  (Ctrl+E)";
+                                enabled: root.has-doc;
+                                activated => {
+                                    root.export-open = true;
+                                }
+                            }
+
+                            MenuItem {
+                                title: "인쇄…  (Ctrl+P)";
+                                enabled: root.has-doc;
+                                activated => {
+                                    root.print();
+                                }
+                            }
+
+                            MenuSeparator { }
+
+                            MenuItem {
+                                title: "PDF·이미지 합치기…";
+                                activated => {
+                                    root.merge-open = true;
+                                }
+                            }
+
+                            MenuSeparator { }
+
+                            Menu {
+                                title: "보기";
+
+                                MenuItem {
+                                    title: root.sidebar-visible ? "썸네일 가리기  (Ctrl+B)" : "썸네일 보기  (Ctrl+B)";
+                                    activated => {
+                                        root.sidebar-visible = !root.sidebar-visible;
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: Theme.dark ? "화이트 모드로  (Ctrl+T)" : "다크 모드로  (Ctrl+T)";
+                                    activated => {
+                                        root.toggle-theme();
+                                    }
+                                }
+
+                                MenuSeparator { }
+
+                                MenuItem {
+                                    title: "확대  (Ctrl++)";
+                                    enabled: root.has-doc;
+                                    activated => {
+                                        root.zoom-in();
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "축소  (Ctrl+-)";
+                                    enabled: root.has-doc;
+                                    activated => {
+                                        root.zoom-out();
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "쪽 맞춤  (Ctrl+0)";
+                                    enabled: root.has-doc;
+                                    activated => {
+                                        root.zoom-fit-page();
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "너비 맞춤  (Ctrl+9)";
+                                    enabled: root.has-doc;
+                                    activated => {
+                                        root.zoom-fit();
+                                    }
+                                }
+                            }
+
+                            Menu {
+                                title: "도움말";
+
+                                MenuItem {
+                                    title: "업데이트 확인…";
+                                    activated => {
+                                        root.check-update();
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "GitHub 저장소 방문…";
+                                    activated => {
+                                        root.open-github();
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "BossPDF 정보…";
+                                    activated => {
+                                        root.info-open = true;
+                                    }
+                                }
+                            }
+
+                            MenuSeparator { }
+
+                            MenuItem {
+                                title: "종료";
+                                activated => {
+                                    root.quit();
+                                }
+                            }
+                        }
+
+                        IconButton {
+                            icon: @image-url("icons/menu.svg");
+                            tip: "메뉴";
+                            clicked => {
+                                root.show-main-menu();
+                            }
                         }
                     }
 
                     IconButton {
                         icon: @image-url("icons/sidebar.svg");
+                        tip: "썸네일 보기/가리기 (Ctrl+B)";
                         active: root.sidebar-visible;
                         clicked => {
                             root.sidebar-visible = !root.sidebar-visible;
@@ -533,6 +733,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/open.svg");
+                        tip: "열기 (Ctrl+O)";
                         clicked => {
                             root.open-clicked();
                         }
@@ -540,6 +741,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/save.svg");
+                        tip: "저장 (Ctrl+S)";
                         enabled: root.has-doc && root.dirty;
                         clicked => {
                             root.save();
@@ -548,6 +750,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/print.svg");
+                        tip: "인쇄 (Ctrl+P)";
                         enabled: root.has-doc;
                         clicked => {
                             root.print();
@@ -556,6 +759,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/export.svg");
+                        tip: "페이지 내보내기 (Ctrl+E)";
                         enabled: root.has-doc;
                         clicked => {
                             root.export-open = true;
@@ -564,6 +768,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/merge.svg");
+                        tip: "PDF·이미지 합치기";
                         clicked => {
                             root.merge-open = true;
                         }
@@ -573,6 +778,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/hand.svg");
+                        tip: "이동/스크롤";
                         enabled: root.has-doc;
                         active: root.has-doc && root.tool == 0;
                         clicked => {
@@ -583,6 +789,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/text.svg");
+                        tip: "텍스트 추가 (클릭한 자리에)";
                         enabled: root.has-doc;
                         active: root.tool == 1;
                         clicked => {
@@ -592,6 +799,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/edit_text.svg");
+                        tip: "텍스트 수정 (고칠 글자를 드래그)";
                         enabled: root.has-doc;
                         active: root.tool == 5;
                         clicked => {
@@ -601,6 +809,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/whiteout.svg");
+                        tip: "가리기 (드래그)";
                         enabled: root.has-doc;
                         active: root.tool == 2;
                         clicked => {
@@ -610,6 +819,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/highlight.svg");
+                        tip: "형광펜 (드래그)";
                         enabled: root.has-doc;
                         active: root.tool == 3;
                         clicked => {
@@ -619,6 +829,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/pen.svg");
+                        tip: "손글씨/서명";
                         enabled: root.has-doc;
                         active: root.tool == 4;
                         clicked => {
@@ -630,6 +841,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/undo.svg");
+                        tip: "실행 취소 (Ctrl+Z)";
                         enabled: root.can-undo;
                         clicked => {
                             root.undo();
@@ -638,6 +850,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/search.svg");
+                        tip: "검색 (Ctrl+F)";
                         enabled: root.has-doc;
                         active: root.search-visible;
                         clicked => {
@@ -653,6 +866,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/zoom_in.svg");
+                        tip: "확대 (Ctrl++)";
                         enabled: root.has-doc;
                         clicked => {
                             root.zoom-in();
@@ -661,6 +875,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/zoom_out.svg");
+                        tip: "축소 (Ctrl+-)";
                         enabled: root.has-doc;
                         clicked => {
                             root.zoom-out();
@@ -669,9 +884,19 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: @image-url("icons/fit_width.svg");
+                        tip: "너비 맞춤 (Ctrl+9)";
                         enabled: root.has-doc;
                         clicked => {
                             root.zoom-fit();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/fit_page.svg");
+                        tip: "쪽 맞춤 (Ctrl+0)";
+                        enabled: root.has-doc;
+                        clicked => {
+                            root.zoom-fit-page();
                         }
                     }
 
@@ -683,6 +908,7 @@ export component AppWindow inherits Window {
 
                     IconButton {
                         icon: Theme.dark ? @image-url("icons/sun.svg") : @image-url("icons/moon.svg");
+                        tip: Theme.dark ? "화이트 모드로 (Ctrl+T)" : "다크 모드로 (Ctrl+T)";
                         clicked => {
                             root.toggle-theme();
                         }
@@ -1100,6 +1326,8 @@ export component AppWindow inherits Window {
                         IconButton {
                             width: 30px;
                             icon: @image-url("icons/chevron_up.svg");
+                            tip: "이전 결과 (Shift+F3)";
+                            tip-below: true;
                             clicked => {
                                 root.search-prev();
                             }
@@ -1108,6 +1336,8 @@ export component AppWindow inherits Window {
                         IconButton {
                             width: 30px;
                             icon: @image-url("icons/chevron_down.svg");
+                            tip: "다음 결과 (F3)";
+                            tip-below: true;
                             clicked => {
                                 root.search-next();
                             }
@@ -1116,6 +1346,8 @@ export component AppWindow inherits Window {
                         IconButton {
                             width: 30px;
                             icon: @image-url("icons/close.svg");
+                            tip: "검색 닫기 (Esc)";
+                            tip-below: true;
                             clicked => {
                                 root.close-search();
                             }
@@ -1400,31 +1632,14 @@ export component AppWindow inherits Window {
                         color: Theme.text-secondary;
                     }
 
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: start;
-                        PillButton {
-                            text: "업데이트 확인";
-                            primary: false;
-                            clicked => {
-                                root.check-update();
-                            }
-                        }
-
-                        PillButton {
-                            text: "암호 없이 저장…";
-                            primary: false;
-                            opacity: root.doc-encrypted ? 1 : 0.4;
-                            clicked => {
-                                if (root.doc-encrypted) {
-                                    root.save-unlocked();
-                                }
-                            }
-                        }
+                    Text {
+                        text: "PDF 뷰어 겸 편집기 · 엔진 MuPDF · 화면 Slint";
+                        color: Theme.text-secondary;
+                        font-size: 12px;
                     }
 
                     Text {
-                        text: root.doc-encrypted ? "이 문서는 암호가 걸려 있습니다. 암호를 푼 사본을 따로 저장할 수 있습니다." : "단축키: Ctrl+O 열기 · Ctrl+S 저장 · Ctrl+P 인쇄 · Ctrl+E 내보내기 · Ctrl+F 검색 · Ctrl+T 테마";
+                        text: "단축키: Ctrl+O 열기 · Ctrl+S 저장 · Ctrl+P 인쇄 · Ctrl+E 내보내기 · Ctrl+F 검색 · Ctrl+0 쪽 맞춤 · Ctrl+9 너비 맞춤 · Ctrl+B 썸네일 · Ctrl+T 테마";
                         color: Theme.text-secondary;
                         font-size: 12px;
                         wrap: word-wrap;
@@ -1883,6 +2098,42 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // ---------- 툴팁: 마우스를 올리고 0.12초 뒤에 뜬다
+    property <string> tip-text: Tip.text;
+    property <bool> tip-shown: false;
+    changed tip-text => {
+        if (root.tip-text == "") {
+            root.tip-shown = false;
+        }
+    }
+
+    Timer {
+        interval: 120ms;
+        running: root.tip-text != "" && !root.tip-shown;
+        triggered => {
+            root.tip-shown = true;
+        }
+    }
+
+    Rectangle {
+        visible: root.tip-shown && root.tip-text != "";
+        x: Tip.below ? max(4px, min(root.width - self.width - 4px, Tip.x - self.width / 2)) : Tip.x;
+        y: Tip.below ? Tip.y : max(4px, min(root.height - self.height - 4px, Tip.y - self.height / 2));
+        width: tip-label.preferred-width + 20px;
+        height: 28px;
+        border-radius: 7px;
+        background: Theme.dark ? #48484A : #1D1D1F;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: #00000050;
+
+        tip-label := Text {
+            text: root.tip-text;
+            color: white;
+            font-size: 12px;
         }
     }
 }

@@ -525,6 +525,18 @@ fn tick(run: &mut Run) {
             let shot = snapshot(run, "14_theme_sheet");
             run.report.push(format!("테마 전환 후 내보내기 창: {shot}"));
             ui.set_export_open(false);
+            ui.invoke_toggle_theme();
+            // ☰ 메뉴는 여기서 열지 않는다: 윈도우 기본 메뉴는 닫힐 때까지 프로그램을 붙잡아 두어 점검이 멈춘다.
+            // (메뉴는 scripts\real-ui-test.ps1로 실제 화면에서 확인한다)
+        }
+        35 => {
+            // ---- 툴팁: 레일 단추 위에 마우스를 올린다 (다음 단계까지의 0.2초 안에 떠야 한다)
+            ui.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(23.0, 207.0) });
+        }
+        36 => {
+            let shot = snapshot(run, "16_tooltip");
+            run.report.push(format!("툴팁({step_ms}ms 안에 표시): {shot}"));
+            ui.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(600.0, 400.0) });
             if std::env::var_os("BOSSPDF_BENCH").is_none() {
                 finish(run);
                 return;
@@ -532,7 +544,7 @@ fn tick(run: &mut Run) {
             // 큰 화면에서의 한 프레임 비용 측정 준비: 창을 3400x1380으로 키운다
             ui.window().set_size(slint::PhysicalSize::new(3400, 1380));
         }
-        35 => {
+        37 => {
             let size = ui.window().size();
             let mut times = Vec::new();
             for n in 0..24 {
