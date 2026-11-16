@@ -1,6 +1,6 @@
 [package]
 name = "bosspdf"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2021"
 description = "BossPDF - PDF viewer and editor"
 

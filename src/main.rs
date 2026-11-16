@@ -1883,6 +1883,26 @@ fn main() -> Result<(), slint::PlatformError> {
     let selftest_dir = args.iter().position(|a| a == "--selftest").and_then(|i| args.get(i + 1).cloned());
     let search_arg = args.iter().position(|a| a == "--search").and_then(|i| args.get(i + 1).cloned());
     let password_arg = args.iter().position(|a| a == "--password").and_then(|i| args.get(i + 1).cloned());
+    // 우클릭 메뉴를 거치지 않는 지름길: 파일을 두 개 이상 넘기거나(예: 여러 파일을 BossPDF 아이콘에 끌어다 놓기)
+    // 이미지 하나를 넘기면 합치기 창으로 시작한다.
+    let args: Vec<String> = {
+        let is_flag_value = |i: usize| i > 0 && matches!(args[i - 1].as_str(), "--selftest" | "--search" | "--password" | "--registry-base");
+        let files: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter(|(i, a)| !a.starts_with("--") && !is_flag_value(*i))
+            .map(|(_, a)| a.clone())
+            .filter(|a| (a.to_lowercase().ends_with(".pdf") || output::is_image_file(a)) && std::path::Path::new(a).is_file())
+            .collect();
+        let plain_run = !args.iter().any(|a| a.starts_with("--"));
+        let only_image = files.len() == 1 && output::is_image_file(&files[0]);
+        if plain_run && (files.len() >= 2 || only_image) {
+            std::iter::once("--merge".to_string()).chain(files).collect()
+        } else {
+            args
+        }
+    };
+
     // --merge 뒤에 오는 파일들은 합치기 창에 올린다
     let merge_args: Vec<String> = args
         .iter()

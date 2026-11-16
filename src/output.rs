@@ -6,7 +6,7 @@ use std::path::Path;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::{ImageFormat, RgbImage};
-use mupdf::pdf::{InsertImageOptions, InsertPdfOptions, PageImageSource, PageSelection, PdfDocument, PdfWriteOptions};
+use mupdf::pdf::{InsertImageOptions, InsertPdfOptions, PageImageSource, PageSelection, PdfDocument, PdfGraftMap, PdfWriteOptions};
 use mupdf::{Colorspace, Matrix, Rect, Size};
 
 /// 이어 붙인 이미지의 최대 픽셀 수 (이보다 크면 메모리가 수 GB 필요해진다)
@@ -85,6 +85,88 @@ fn save_pdf(doc: &PdfDocument, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 쪽에 붙은 주석(형광펜·필기·메모·도형·글상자 등)을 다른 문서의 쪽으로 옮겨 붙인다.
+///
+/// MuPDF의 쪽 복사(pdf_graft_page)는 쪽 내용만 옮기고 주석은 옮기지 않아서, 다른 프로그램에서 넣은
+/// 필기가 합친 결과에서 사라졌다. 옮긴 주석 수를 돌려준다.
+/// - 입력 양식 칸(Widget)과 메모 팝업 창(Popup)은 옮기지 않는다 (메모 내용 자체는 주석에 들어 있어 유지됨)
+/// - 링크는 웹 주소 링크만 옮긴다 (문서 안 이동 링크는 대상 쪽이 달라지므로 뺌)
+fn copy_annotations(
+    dst: &mut PdfDocument,
+    map: &mut PdfGraftMap,
+    src: &PdfDocument,
+    src_index: usize,
+    dst_index: usize,
+) -> Result<usize, mupdf::Error> {
+    let name_of = |obj: Option<mupdf::pdf::PdfObject>| -> String {
+        obj.and_then(|o| o.as_name().ok())
+            .map(|bytes| String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string())
+            .unwrap_or_default()
+    };
+    let src_page = src.find_page(src_index as i32)?;
+    let Some(annots) = src_page.get_dict("Annots")? else { return Ok(0) };
+    if !annots.is_array()? {
+        return Ok(0);
+    }
+    let mut copied = Vec::new();
+    for i in 0..annots.len()? {
+        let Some(annot) = annots.get_array(i as i32)? else { continue };
+        if !annot.is_dict()? {
+            continue;
+        }
+        let subtype = name_of(annot.get_dict("Subtype")?);
+        if subtype == "Widget" || subtype == "Popup" {
+            continue;
+        }
+        if subtype == "Link" {
+            let action = annot.get_dict("A")?;
+            let is_web_link = match action {
+                Some(a) if a.is_dict()? => name_of(a.get_dict("S")?) == "URI",
+                _ => false,
+            };
+            if !is_web_link {
+                continue;
+            }
+        }
+        // 원본 쪽을 가리키는 항목을 뺀 얕은 사본을 만들어 옮긴다.
+        // (그대로 옮기면 /P를 따라 원본 쪽과 그 위의 문서 구조까지 통째로 딸려 온다)
+        let mut copy = annot.copy_dict()?;
+        for key in ["P", "Popup", "IRT", "Parent"] {
+            copy.dict_delete(key)?;
+        }
+        let grafted = map.graft_object(&copy)?;
+        copied.push(dst.add_object(&grafted)?);
+    }
+    if copied.is_empty() {
+        return Ok(0);
+    }
+    let count = copied.len();
+    let mut array = dst.new_array()?;
+    for reference in copied {
+        array.array_push(reference)?;
+    }
+    let mut dst_page = dst.find_page(dst_index as i32)?;
+    dst_page.dict_put("Annots", array)?;
+    Ok(count)
+}
+
+/// src의 쪽들(pages, 없으면 전체)을 dst 끝에 붙이고 주석도 함께 옮긴다
+fn append_pages(dst: &mut PdfDocument, src: &PdfDocument, pages: Option<&[usize]>) -> Result<(), mupdf::Error> {
+    let count = src.page_count()?.max(0) as usize;
+    let indices: Vec<usize> = match pages {
+        Some(list) => list.to_vec(),
+        None => (0..count).collect(),
+    };
+    let start = dst.page_count()?.max(0) as usize;
+    dst.insert_pdf(src, InsertPdfOptions { source_pages: PageSelection::Pages(indices.clone()), ..Default::default() })?;
+    let mut map = dst.new_graft_map()?;
+    for (offset, &src_index) in indices.iter().enumerate() {
+        // 주석 하나가 깨져 있어도 쪽 자체는 이미 옮겨졌으므로, 그 쪽의 주석만 포기하고 계속한다
+        let _ = copy_annotations(dst, &mut map, src, src_index, start + offset);
+    }
+    Ok(())
+}
+
 fn render_page(doc: &PdfDocument, index: usize, dpi: u32) -> Result<RgbImage, String> {
     let scale = dpi as f32 / 72.0;
     let page = doc.load_page(index as i32).map_err(err)?;
@@ -132,8 +214,7 @@ pub fn export(doc: &PdfDocument, pages: &[usize], kind: &ExportKind) -> Result<S
     match kind {
         ExportKind::Pdf { path } => {
             let mut out = PdfDocument::new();
-            out.insert_pdf(doc, InsertPdfOptions { source_pages: PageSelection::Pages(pages.to_vec()), ..Default::default() })
-                .map_err(err)?;
+            append_pages(&mut out, doc, Some(pages)).map_err(err)?;
             save_pdf(&out, path)?;
             Ok(format!("{}쪽을 새 PDF로 내보냈습니다", pages.len()))
         }
@@ -202,7 +283,7 @@ pub fn merge(files: &[String], out_path: &str, options: &MergeOptions) -> Result
             if src.needs_password().unwrap_or(false) {
                 return Err(format!("{name}: 암호가 걸린 문서입니다. 먼저 열어서 암호 없이 저장한 뒤 합쳐 주세요."));
             }
-            out.insert_pdf(&src, InsertPdfOptions::default()).map_err(|e| format!("{name}: {e}"))?;
+            append_pages(&mut out, &src, None).map_err(|e| format!("{name}: {e}"))?;
         }
     }
     let pages = out.page_count().map_err(err)?.max(0) as usize;
