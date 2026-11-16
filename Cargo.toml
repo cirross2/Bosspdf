@@ -1,0 +1,42 @@
+[package]
+name = "bosspdf"
+version = "2.0.0"
+edition = "2021"
+description = "BossPDF - PDF viewer and editor"
+
+# 실행 파일 이름은 파이썬 버전과 같은 BossPDF.exe (설치 위치·바로가기·연결 프로그램이 그대로 이어진다)
+[[bin]]
+name = "BossPDF"
+path = "src/main.rs"
+
+[dependencies]
+# PDF 엔진: 파이썬 버전(PyMuPDF)과 같은 MuPDF. 뷰어에 필요 없는 형식(epub/xps/svg/js/OCR)은 빼서 용량을 줄임
+# system-fonts(font-kit)는 글꼴 탐색이 느려서 끄고 src/fonts.rs의 자체 로더를 사용
+mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts"] }
+# 화면: 기본은 GPU(femtovg). 큰 화면 스크롤이 소프트웨어 방식보다 훨씬 부드럽다.
+# 소프트웨어 방식은 GPU를 못 쓰는 환경용 예비 (환경 변수 SLINT_BACKEND=winit-software)
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "raw-window-handle-06"] }
+rfd = "0.18.0"
+winreg = "0.56.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif", "tiff"] }
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_Xps", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_Controls_Dialogs", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Media_Ocr", "Globalization", "Graphics_Imaging", "Storage_Streams", "Foundation_Collections", "Web_Http", "Web_Http_Headers", "Foundation"] }
+serde_json = "1.0.154"
+
+[build-dependencies]
+slint-build = "1.18.1"
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# mupdf-sys 0.8.0의 C 래퍼가 C23 빈 초기화 `{}`를 써서 MSVC 17.4에서 컴파일되지 않음
+# → scripts\vendor-mupdf.ps1로 만든 수정본을 사용
+[patch.crates-io]
+mupdf-sys = { path = "vendor/mupdf-sys" }
+mupdf = { path = "vendor/mupdf" }

@@ -1,0 +1,1888 @@
+// BossPDF (Rust 시제품) 화면 정의
+// 페이지·썸네일은 Rust 쪽에서 "지금 보이는 것만" 모델에 넣어 준다(가상화).
+import { ScrollView, LineEdit, ListView, TextEdit, Palette } from "std-widgets.slint";
+
+export struct Hit {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    current: bool,
+}
+
+export struct PageView {
+    index: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    image: image,
+    ready: bool,
+    hits: [Hit],
+}
+
+export struct ThumbView {
+    index: int,
+    y: length,
+    w: length,
+    h: length,
+    image: image,
+    ready: bool,
+}
+
+// 편집 도구 번호 (Rust의 TOOL_* 상수와 같아야 한다)
+// 0 이동, 1 텍스트 추가, 2 가리기, 3 형광펜, 4 손글씨, 5 텍스트 수정
+
+// 색 모음. dark를 바꾸면 화면 전체가 다크/화이트로 바뀐다 (파이썬 버전의 팔레트와 같은 값)
+export global Theme {
+    in-out property <bool> dark: false;
+    out property <color> window-bg: dark ? #1C1C1E : #F5F5F7;
+    out property <color> sidebar-bg: dark ? #161618 : #F2F2F7;
+    out property <color> card-bg: dark ? #2C2C2E : #FFFFFF;
+    out property <color> canvas-bg: dark ? #121214 : #383B40;
+    out property <color> text-primary: dark ? #FFFFFF : #1D1D1F;
+    out property <color> text-secondary: dark ? #8E8E93 : #86868B;
+    out property <color> accent: dark ? #2997FF : #007AFF;
+    out property <color> accent-tint: dark ? #2997FF38 : #EBF3FF;
+    out property <color> border-subtle: dark ? #2C2C2E : #E5E5EA;
+    out property <color> border-standard: dark ? #3A3A3C : #D1D1D6;
+    out property <color> danger: dark ? #FF453A : #FF3B30;
+    // 마우스를 올렸을 때·옅게 채울 때 쓰는 덧칠
+    out property <color> hover: dark ? #FFFFFF1F : #00000012;
+    out property <color> hover-soft: dark ? #FFFFFF12 : #0000000D;
+    out property <color> fill: dark ? #FFFFFF14 : #0000000A;
+    out property <color> pill: dark ? #3A3A3C : #EDEDF0;
+    out property <color> pill-hover: dark ? #48484A : #E5E5EA;
+    // 페이지 위에 떠 있는 막대(쪽 번호, 알림)
+    out property <color> floating-bg: dark ? #3A3A3CF2 : #1D1D1FE6;
+}
+
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <color> tint: Theme.text-primary;
+    callback clicked();
+
+    width: 36px;
+    height: 30px;
+    border-radius: 7px;
+    background: root.active ? Theme.accent-tint : (touch.has-hover && root.enabled ? Theme.hover : transparent);
+    opacity: root.enabled ? 1 : 0.35;
+
+    Image {
+        source: root.icon;
+        width: 20px;
+        height: 20px;
+        colorize: root.active ? Theme.accent : root.tint;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component RailSeparator inherits Rectangle {
+    width: 36px;
+    height: 9px;
+    Rectangle {
+        height: 1px;
+        width: 24px;
+        background: Theme.border-standard;
+    }
+}
+
+// 여러 개 중 하나를 고르는 단추
+component Choice inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected: false;
+    callback clicked();
+
+    height: 30px;
+    min-width: choice-label.preferred-width + 24px;
+    border-radius: 7px;
+    background: root.selected ? Theme.accent : (choice-touch.has-hover ? Theme.hover : Theme.fill);
+
+    choice-label := Text {
+        text: root.text;
+        color: root.selected ? white : Theme.text-primary;
+        font-size: 13px;
+    }
+
+    choice-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// 화면 가운데에 뜨는 창의 바탕 (뒤쪽 클릭을 막는다)
+component Sheet inherits Rectangle {
+    in property <string> title;
+    in property <length> sheet-width: 460px;
+    background: #00000066;
+
+    TouchArea { }
+
+    Rectangle {
+        width: root.sheet-width;
+        height: sheet-layout.preferred-height;
+        border-radius: 14px;
+        background: Theme.card-bg;
+        drop-shadow-blur: 30px;
+        drop-shadow-color: #00000060;
+
+        sheet-layout := VerticalLayout {
+            padding: 22px;
+            spacing: 14px;
+
+            Text {
+                text: root.title;
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text-primary;
+            }
+
+            @children
+        }
+    }
+}
+
+component FieldLabel inherits Text {
+    color: Theme.text-secondary;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+component PillButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: true;
+    callback clicked();
+
+    height: 34px;
+    min-width: label.preferred-width + 32px;
+    border-radius: 8px;
+    background: root.primary ? (touch.pressed ? #0051A8 : touch.has-hover ? #0062CC : Theme.accent) : (touch.has-hover ? Theme.pill-hover : Theme.pill);
+
+    label := Text {
+        text: root.text;
+        color: root.primary ? white : Theme.text-primary;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    // ---- Rust → 화면
+    in property <bool> has-doc: false;
+    in property <string> doc-title: "";
+    in property <string> status-text: "";
+    in property <[PageView]> pages;
+    in property <length> content-w: 0px;
+    in property <length> content-h: 0px;
+    in property <[ThumbView]> thumbs;
+    in property <length> thumbs-content-h: 0px;
+    in property <int> current-page: 0;
+    in property <int> page-count: 0;
+    in property <string> zoom-label: "100%";
+    in property <string> search-label: "";
+    in property <bool> ask-password: false;
+    in property <string> password-error: "";
+    in property <bool> can-undo: false;
+    in property <bool> dirty: false;
+    in property <string> toast: "";
+    // 썸네일을 끌 때 끼워 넣을 자리를 보여 주는 선의 위치 (음수면 숨김)
+    in property <length> thumb-drop-y: -1px;
+    // 손글씨 미리보기 (페이지 안 좌표의 SVG 경로)
+    in property <int> pen-page: -1;
+    in property <string> pen-path: "";
+    in property <length> pen-width: 2px;
+    // 1pt가 화면에서 차지하는 논리 픽셀 (확대 배율)
+    in property <float> zoom-px: 1.0;
+    // 설치된 글꼴 이름 목록 (텍스트 도구를 처음 고를 때 채운다)
+    in property <[string]> fonts;
+
+    // ---- 화면 ↔ Rust
+    in-out property <length> scroll-x <=> view.content-x;
+    in-out property <length> scroll-y <=> view.content-y;
+    out property <length> view-w <=> view.visible-width;
+    out property <length> view-h <=> view.visible-height;
+    in-out property <length> thumbs-scroll-y <=> thumb-view.content-y;
+    out property <length> thumbs-view-h <=> thumb-view.visible-height;
+    in-out property <bool> sidebar-visible: true;
+    in-out property <bool> search-visible: false;
+    in-out property <string> search-text: "";
+    in-out property <int> tool: 0;
+    // 텍스트를 넣을 위치 (text-page가 -1이면 입력창 없음)
+    in-out property <int> text-page: -1;
+    in-out property <length> text-x: 0px;
+    in-out property <length> text-y: 0px;
+    // 입력창의 최소 크기와 처음 내용 (기존 텍스트를 수정할 때 Rust가 채운다)
+    in-out property <length> text-w: 0px;
+    in-out property <length> text-h: 0px;
+    in-out property <string> text-initial: "";
+    // true면 입력한 내용이 기존 텍스트를 대체한다
+    in-out property <bool> text-replacing: false;
+    // 텍스트 서식
+    in-out property <string> text-font: "맑은 고딕";
+    in-out property <float> text-pt: 14;
+    in-out property <bool> text-bold: false;
+    in-out property <color> text-color: #000000;
+    property <bool> font-list-open: false;
+    property <bool> text-tool: root.tool == 1 || root.tool == 5;
+    property <length> text-size: root.text-pt * root.zoom-px * 1px;
+
+    callback open-clicked();
+    callback view-changed();
+    callback thumbs-view-changed();
+    callback zoom-in();
+    callback zoom-out();
+    callback zoom-fit();
+    callback search-edited(text: string);
+    callback search-next();
+    callback search-prev();
+    callback search-closed();
+    callback goto-page(text: string);
+    callback thumb-clicked(index: int);
+    callback password-submitted(text: string);
+    callback password-cancelled();
+    callback edit-rect(page: int, x0: length, y0: length, x1: length, y1: length);
+    callback pen-start(page: int, x: length, y: length);
+    callback pen-move(x: length, y: length);
+    callback pen-end();
+    callback text-accepted(page: int, x: length, y: length, text: string, replacing: bool);
+    callback need-fonts();
+    // 내보내기 창
+    in-out property <bool> export-open: false;
+    // 0 전체, 1 현재 쪽, 2 직접 지정
+    in-out property <int> export-range-mode: 0;
+    in-out property <string> export-range: "";
+    // 0 새 PDF, 1 쪽별 이미지, 2 이어 붙인 이미지
+    in-out property <int> export-kind: 0;
+    in-out property <bool> export-jpg: false;
+    in-out property <int> export-dpi: 150;
+    in property <string> export-error: "";
+    // 정보 창 (버전, 업데이트 확인, 암호 없이 저장)
+    in-out property <bool> info-open: false;
+    in property <string> app-version: "";
+    in property <bool> doc-encrypted: false;
+    callback check-update();
+    callback save-unlocked();
+
+    // 업데이트 창
+    in-out property <bool> update-open: false;
+    in property <string> update-version: "";
+    in property <string> update-notes: "";
+    in property <string> update-status: "";
+    in property <bool> update-busy: false;
+    callback update-start();
+
+    callback export-run();
+    callback print();
+
+    // 합치기 창
+    in-out property <bool> merge-open: false;
+    in property <[string]> merge-files;
+    in-out property <int> merge-selected: -1;
+    in-out property <bool> merge-fit-a4: true;
+    // 0 없음, 1 좁게, 2 기본, 3 넓게
+    in-out property <int> merge-margin: 2;
+    in property <string> merge-error: "";
+    callback merge-add();
+    callback merge-remove(index: int);
+    callback merge-move(index: int, delta: int);
+    callback merge-run();
+
+    // 페이지 조작 (썸네일 우클릭 메뉴와 끌어서 옮기기)
+    callback page-rotate(page: int, delta: int);
+    // where: -1 앞으로, 1 뒤로, -2 맨 앞으로, 2 맨 뒤로
+    callback page-move(page: int, where: int);
+    callback page-delete(page: int);
+    callback thumb-drag(page: int, y: length);
+    callback thumb-drop();
+    callback undo();
+    // 테마를 바꿨거나 사이드바를 여닫았을 때 (설정 저장용)
+    callback settings-changed();
+    callback save();
+    callback save-as();
+
+    title: (root.dirty ? "● " : "") + (root.doc-title == "" ? "BossPDF" : root.doc-title + " - BossPDF");
+    icon: @image-url("../assets/app_icon.png");
+    preferred-width: 1180px;
+    preferred-height: 820px;
+    min-width: 560px;
+    min-height: 720px;
+    background: Theme.window-bg;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+
+    changed scroll-y => {
+        root.view-changed();
+    }
+    changed view-w => {
+        root.view-changed();
+    }
+    changed view-h => {
+        root.view-changed();
+    }
+    changed thumbs-scroll-y => {
+        root.thumbs-view-changed();
+    }
+    changed thumbs-view-h => {
+        root.thumbs-view-changed();
+    }
+    changed sidebar-visible => {
+        root.thumbs-view-changed();
+        root.settings-changed();
+    }
+
+    // 입력창·스크롤 막대 같은 기본 위젯의 색도 테마에 맞춘다
+    public function apply-theme() {
+        Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    public function toggle-theme() {
+        Theme.dark = !Theme.dark;
+        root.apply-theme();
+        root.settings-changed();
+    }
+    changed tool => {
+        root.close-editor();
+        root.font-list-open = false;
+        if (root.text-tool) {
+            root.need-fonts();
+        }
+    }
+
+    public function open-search() {
+        root.search-visible = true;
+        search-input.focus();
+        search-input.select-all();
+    }
+
+    function close-search() {
+        root.search-visible = false;
+        root.search-closed();
+        keys.focus();
+    }
+
+    function scroll-by(dy: length) {
+        root.scroll-y = min(0px, max(root.view-h - root.content-h, root.scroll-y - dy));
+    }
+
+    function close-editor() {
+        root.text-page = -1;
+        root.text-replacing = false;
+        root.text-initial = "";
+        root.text-w = 0px;
+        root.text-h = 0px;
+    }
+
+    function pick-tool(t: int) {
+        root.tool = root.tool == t ? 0 : t;
+        keys.focus();
+    }
+
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control) {
+                if (event.text == "o") {
+                    root.open-clicked();
+                    return accept;
+                }
+                if (event.text == "s" || event.text == "S") {
+                    if (root.has-doc) {
+                        if (event.modifiers.shift) {
+                            root.save-as();
+                        } else {
+                            root.save();
+                        }
+                    }
+                    return accept;
+                }
+                if (event.text == "p") {
+                    if (root.has-doc) {
+                        root.print();
+                    }
+                    return accept;
+                }
+                if (event.text == "e") {
+                    if (root.has-doc) {
+                        root.export-open = true;
+                    }
+                    return accept;
+                }
+                if (event.text == "z") {
+                    if (root.can-undo) {
+                        root.undo();
+                    }
+                    return accept;
+                }
+                if (event.text == "f") {
+                    if (root.has-doc) {
+                        root.open-search();
+                    }
+                    return accept;
+                }
+                if (event.text == "=" || event.text == "+") {
+                    root.zoom-in();
+                    return accept;
+                }
+                if (event.text == "-") {
+                    root.zoom-out();
+                    return accept;
+                }
+                if (event.text == "0") {
+                    root.zoom-fit();
+                    return accept;
+                }
+                if (event.text == "t") {
+                    root.toggle-theme();
+                    return accept;
+                }
+                if (event.text == "b") {
+                    root.sidebar-visible = !root.sidebar-visible;
+                    return accept;
+                }
+                return reject;
+            }
+            if (event.text == Key.Escape) {
+                if (root.search-visible) {
+                    root.close-search();
+                } else {
+                    root.tool = 0;
+                }
+                return accept;
+            }
+            if (event.text == Key.F3) {
+                if (event.modifiers.shift) {
+                    root.search-prev();
+                } else {
+                    root.search-next();
+                }
+                return accept;
+            }
+            if (event.text == Key.PageDown || event.text == " ") {
+                root.scroll-by(root.view-h * 0.9);
+                return accept;
+            }
+            if (event.text == Key.PageUp) {
+                root.scroll-by(-root.view-h * 0.9);
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.scroll-by(60px);
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.scroll-by(-60px);
+                return accept;
+            }
+            if (event.text == Key.Home) {
+                root.scroll-y = 0px;
+                return accept;
+            }
+            if (event.text == Key.End) {
+                root.scroll-y = min(0px, root.view-h - root.content-h);
+                return accept;
+            }
+            return reject;
+        }
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            // ---------- 왼쪽 세로 레일
+            Rectangle {
+                width: 46px;
+                background: Theme.window-bg;
+
+                VerticalLayout {
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    padding-left: 5px;
+                    spacing: 3px;
+
+                    IconButton {
+                        icon: @image-url("icons/menu.svg");
+                        clicked => {
+                            root.info-open = true;
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/sidebar.svg");
+                        active: root.sidebar-visible;
+                        clicked => {
+                            root.sidebar-visible = !root.sidebar-visible;
+                        }
+                    }
+
+                    RailSeparator { }
+
+                    IconButton {
+                        icon: @image-url("icons/open.svg");
+                        clicked => {
+                            root.open-clicked();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/save.svg");
+                        enabled: root.has-doc && root.dirty;
+                        clicked => {
+                            root.save();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/print.svg");
+                        enabled: root.has-doc;
+                        clicked => {
+                            root.print();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/export.svg");
+                        enabled: root.has-doc;
+                        clicked => {
+                            root.export-open = true;
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/merge.svg");
+                        clicked => {
+                            root.merge-open = true;
+                        }
+                    }
+
+                    RailSeparator { }
+
+                    IconButton {
+                        icon: @image-url("icons/hand.svg");
+                        enabled: root.has-doc;
+                        active: root.has-doc && root.tool == 0;
+                        clicked => {
+                            root.tool = 0;
+                            keys.focus();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/text.svg");
+                        enabled: root.has-doc;
+                        active: root.tool == 1;
+                        clicked => {
+                            root.pick-tool(1);
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/edit_text.svg");
+                        enabled: root.has-doc;
+                        active: root.tool == 5;
+                        clicked => {
+                            root.pick-tool(5);
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/whiteout.svg");
+                        enabled: root.has-doc;
+                        active: root.tool == 2;
+                        clicked => {
+                            root.pick-tool(2);
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/highlight.svg");
+                        enabled: root.has-doc;
+                        active: root.tool == 3;
+                        clicked => {
+                            root.pick-tool(3);
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/pen.svg");
+                        enabled: root.has-doc;
+                        active: root.tool == 4;
+                        clicked => {
+                            root.pick-tool(4);
+                        }
+                    }
+
+                    RailSeparator { }
+
+                    IconButton {
+                        icon: @image-url("icons/undo.svg");
+                        enabled: root.can-undo;
+                        clicked => {
+                            root.undo();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/search.svg");
+                        enabled: root.has-doc;
+                        active: root.search-visible;
+                        clicked => {
+                            if (root.search-visible) {
+                                root.close-search();
+                            } else {
+                                root.open-search();
+                            }
+                        }
+                    }
+
+                    RailSeparator { }
+
+                    IconButton {
+                        icon: @image-url("icons/zoom_in.svg");
+                        enabled: root.has-doc;
+                        clicked => {
+                            root.zoom-in();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/zoom_out.svg");
+                        enabled: root.has-doc;
+                        clicked => {
+                            root.zoom-out();
+                        }
+                    }
+
+                    IconButton {
+                        icon: @image-url("icons/fit_width.svg");
+                        enabled: root.has-doc;
+                        clicked => {
+                            root.zoom-fit();
+                        }
+                    }
+
+                    // 남는 공간을 차지해서 테마 단추를 맨 아래로 민다
+                    Rectangle {
+                        width: 36px;
+                        vertical-stretch: 1;
+                    }
+
+                    IconButton {
+                        icon: Theme.dark ? @image-url("icons/sun.svg") : @image-url("icons/moon.svg");
+                        clicked => {
+                            root.toggle-theme();
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.border-subtle;
+                }
+            }
+
+            // ---------- 썸네일 사이드바
+            Rectangle {
+                width: root.sidebar-visible && root.has-doc ? 168px : 0px;
+                visible: self.width > 0;
+                background: Theme.sidebar-bg;
+                clip: true;
+
+                thumb-view := ScrollView {
+                    content-width: self.visible-width;
+                    content-height: root.thumbs-content-h;
+
+                    for t in root.thumbs: Rectangle {
+                        x: 0px;
+                        y: t.y;
+                        width: 154px;
+                        height: t.h + 30px;
+
+                        Rectangle {
+                            x: (parent.width - self.width) / 2;
+                            y: 4px;
+                            width: t.w + 8px;
+                            height: t.h + 8px;
+                            border-radius: 6px;
+                            background: t.index == root.current-page ? Theme.accent : transparent;
+
+                            Rectangle {
+                                x: 4px;
+                                y: 4px;
+                                width: t.w;
+                                height: t.h;
+                                background: white;
+                                border-width: 1px;
+                                border-color: Theme.border-standard;
+
+                                Image {
+                                    width: 100%;
+                                    height: 100%;
+                                    source: t.image;
+                                    visible: t.ready;
+                                }
+                            }
+                        }
+
+                        Text {
+                            y: t.h + 13px;
+                            width: 100%;
+                            horizontal-alignment: center;
+                            text: t.index + 1;
+                            font-size: 11px;
+                            color: t.index == root.current-page ? Theme.accent : Theme.text-secondary;
+                            font-weight: t.index == root.current-page ? 600 : 400;
+                        }
+
+                        ContextMenuArea {
+                            Menu {
+                                MenuItem {
+                                    title: "시계 방향 90° 회전";
+                                    activated => {
+                                        root.page-rotate(t.index, 90);
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "반시계 방향 90° 회전";
+                                    activated => {
+                                        root.page-rotate(t.index, -90);
+                                    }
+                                }
+
+                                MenuSeparator { }
+
+                                MenuItem {
+                                    title: "앞으로 이동";
+                                    enabled: t.index > 0;
+                                    activated => {
+                                        root.page-move(t.index, -1);
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "뒤로 이동";
+                                    enabled: t.index < root.page-count - 1;
+                                    activated => {
+                                        root.page-move(t.index, 1);
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "맨 앞으로";
+                                    enabled: t.index > 0;
+                                    activated => {
+                                        root.page-move(t.index, -2);
+                                    }
+                                }
+
+                                MenuItem {
+                                    title: "맨 뒤로";
+                                    enabled: t.index < root.page-count - 1;
+                                    activated => {
+                                        root.page-move(t.index, 2);
+                                    }
+                                }
+
+                                MenuSeparator { }
+
+                                MenuItem {
+                                    title: "페이지 삭제";
+                                    enabled: root.page-count > 1;
+                                    activated => {
+                                        root.page-delete(t.index);
+                                    }
+                                }
+                            }
+
+                            // 클릭하면 그 쪽으로 이동, 위아래로 끌면 순서 바꾸기
+                            thumb-touch := TouchArea {
+                                property <bool> dragging: false;
+                                pointer-event(event) => {
+                                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up && self.dragging) {
+                                        self.dragging = false;
+                                        root.thumb-drop();
+                                    }
+                                }
+                                moved => {
+                                    if (self.pressed && (self.dragging || abs((self.mouse-y - self.pressed-y) / 1px) > 8)) {
+                                        self.dragging = true;
+                                        root.thumb-drag(t.index, t.y + self.mouse-y);
+                                    }
+                                }
+                                clicked => {
+                                    root.thumb-clicked(t.index);
+                                    keys.focus();
+                                }
+                            }
+                        }
+                    }
+
+                    // 끌어 놓을 자리 표시
+                    Rectangle {
+                        visible: root.thumb-drop-y >= 0px;
+                        x: 10px;
+                        y: root.thumb-drop-y - 1.5px;
+                        width: 134px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: Theme.accent;
+                    }
+                }
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.border-subtle;
+                }
+            }
+
+            // ---------- 문서 영역
+            Rectangle {
+                horizontal-stretch: 1;
+                background: root.has-doc ? Theme.canvas-bg : Theme.window-bg;
+                clip: true;
+
+                view := ScrollView {
+                    visible: root.has-doc;
+                    content-width: root.content-w;
+                    content-height: root.content-h;
+
+                    TouchArea {
+                        width: max(root.content-w, view.visible-width);
+                        height: max(root.content-h, view.visible-height);
+                        clicked => {
+                            keys.focus();
+                        }
+                        scroll-event(event) => {
+                            if (event.modifiers.control) {
+                                if (event.delta-y > 0) {
+                                    root.zoom-in();
+                                } else if (event.delta-y < 0) {
+                                    root.zoom-out();
+                                }
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+
+                    for p in root.pages: Rectangle {
+                        x: p.x;
+                        y: p.y;
+                        width: p.w;
+                        height: p.h;
+                        background: white;
+                        drop-shadow-blur: 10px;
+                        drop-shadow-offset-y: 2px;
+                        drop-shadow-color: #00000055;
+
+                        Image {
+                            width: 100%;
+                            height: 100%;
+                            source: p.image;
+                            visible: p.ready;
+                        }
+
+                        for h in p.hits: Rectangle {
+                            x: h.x;
+                            y: h.y;
+                            width: h.w;
+                            height: h.h;
+                            background: h.current ? #FF950099 : #FFD60A70;
+                            border-width: h.current ? 1.5px : 0px;
+                            border-color: #FF9500;
+                            border-radius: 2px;
+                        }
+
+                        // 편집 입력: 도구가 선택됐을 때만 마우스를 받는다
+                        edit-touch := TouchArea {
+                            enabled: root.tool != 0;
+                            mouse-cursor: root.tool == 1 ? MouseCursor.text : MouseCursor.crosshair;
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.left) {
+                                    if (event.kind == PointerEventKind.down) {
+                                        if (root.tool == 4) {
+                                            root.pen-start(p.index, self.mouse-x, self.mouse-y);
+                                        }
+                                    } else if (event.kind == PointerEventKind.up) {
+                                        if (root.tool == 4) {
+                                            root.pen-end();
+                                        } else if (root.tool == 1) {
+                                            root.close-editor();
+                                            root.text-x = self.mouse-x;
+                                            root.text-y = self.mouse-y;
+                                            root.text-page = p.index;
+                                        } else if (root.tool == 2 || root.tool == 3 || root.tool == 5) {
+                                            root.edit-rect(p.index, self.pressed-x, self.pressed-y, self.mouse-x, self.mouse-y);
+                                        }
+                                    }
+                                }
+                            }
+                            moved => {
+                                if (root.tool == 4 && self.pressed) {
+                                    root.pen-move(self.mouse-x, self.mouse-y);
+                                }
+                            }
+                        }
+
+                        // 끌어서 지정하는 영역 미리보기 (가리기·형광펜·텍스트 수정)
+                        Rectangle {
+                            visible: edit-touch.pressed && (root.tool == 2 || root.tool == 3 || root.tool == 5);
+                            x: min(edit-touch.pressed-x, edit-touch.mouse-x);
+                            y: min(edit-touch.pressed-y, edit-touch.mouse-y);
+                            width: max(edit-touch.pressed-x, edit-touch.mouse-x) - self.x;
+                            height: max(edit-touch.pressed-y, edit-touch.mouse-y) - self.y;
+                            background: root.tool == 3 ? #FFE63366 : root.tool == 5 ? #007AFF22 : #FFFFFFD0;
+                            border-width: 1px;
+                            border-color: Theme.accent;
+                        }
+
+                        // 손글씨 미리보기
+                        if root.pen-page == p.index && root.pen-path != "": Path {
+                            width: 100%;
+                            height: 100%;
+                            viewbox-width: p.w / 1px;
+                            viewbox-height: p.h / 1px;
+                            commands: root.pen-path;
+                            stroke: #1A4DE6;
+                            stroke-width: root.pen-width;
+                            fill: transparent;
+                        }
+
+                        // 텍스트 입력창 (추가·수정 공용). Enter 적용, Shift+Enter 줄바꿈, Esc 취소
+                        if root.text-page == p.index: Rectangle {
+                            x: max(0px, min(root.text-x - 8px, parent.width - self.width));
+                            y: root.text-y - 8px;
+                            width: min(parent.width, max(280px, root.text-w + 40px));
+                            height: max(root.text-size * 1.5 + 22px, root.text-h + 26px) + 22px;
+
+                            editor := TextEdit {
+                                width: 100%;
+                                height: parent.height - 22px;
+                                font-size: root.text-size;
+                                font-family: root.text-font;
+                                wrap: no-wrap;
+                                text: root.text-initial;
+                                placeholder-text: "텍스트 입력";
+                                key-pressed(event) => {
+                                    if (event.text == Key.Return && !event.modifiers.shift) {
+                                        root.text-accepted(p.index, root.text-x, root.text-y, self.text, root.text-replacing);
+                                        root.close-editor();
+                                        keys.focus();
+                                        return accept;
+                                    }
+                                    if (event.text == Key.Escape) {
+                                        root.close-editor();
+                                        keys.focus();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                                init => {
+                                    self.focus();
+                                    self.select-all();
+                                }
+                            }
+
+                            Rectangle {
+                                y: parent.height - 20px;
+                                height: 18px;
+                                width: hint.preferred-width + 14px;
+                                x: 0px;
+                                border-radius: 9px;
+                                background: #1D1D1FCC;
+                                hint := Text {
+                                    text: "Enter 적용 · Shift+Enter 줄바꿈 · Esc 취소";
+                                    color: white;
+                                    font-size: 10px;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 빈 화면
+                if !root.has-doc: VerticalLayout {
+                    alignment: center;
+                    spacing: 14px;
+
+                    Text {
+                        text: "BossPDF";
+                        horizontal-alignment: center;
+                        font-size: 28px;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                    }
+
+                    Text {
+                        text: root.status-text == "" ? "PDF 파일을 열어 주세요 (Ctrl+O)" : root.status-text;
+                        horizontal-alignment: center;
+                        color: Theme.text-secondary;
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        PillButton {
+                            text: "PDF 열기";
+                            clicked => {
+                                root.open-clicked();
+                            }
+                        }
+                    }
+                }
+
+                // 검색 막대 (오른쪽 위)
+                Rectangle {
+                    visible: root.search-visible && root.has-doc;
+                    x: parent.width - self.width - 28px;
+                    y: root.text-tool ? 64px : 14px;
+                    width: 460px;
+                    height: 44px;
+                    border-radius: 11px;
+                    background: Theme.card-bg;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    drop-shadow-blur: 18px;
+                    drop-shadow-offset-y: 4px;
+                    drop-shadow-color: #00000040;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 6px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 4px;
+
+                        search-input := LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "문서에서 검색";
+                            text <=> root.search-text;
+                            edited(text) => {
+                                root.search-edited(text);
+                            }
+                            accepted(text) => {
+                                root.search-next();
+                            }
+                            key-pressed(event) => {
+                                if (event.text == Key.Escape) {
+                                    root.close-search();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+
+                        Text {
+                            text: root.search-label;
+                            vertical-alignment: center;
+                            color: Theme.text-secondary;
+                            font-size: 12px;
+                            min-width: 52px;
+                            horizontal-alignment: center;
+                        }
+
+                        IconButton {
+                            width: 30px;
+                            icon: @image-url("icons/chevron_up.svg");
+                            clicked => {
+                                root.search-prev();
+                            }
+                        }
+
+                        IconButton {
+                            width: 30px;
+                            icon: @image-url("icons/chevron_down.svg");
+                            clicked => {
+                                root.search-next();
+                            }
+                        }
+
+                        IconButton {
+                            width: 30px;
+                            icon: @image-url("icons/close.svg");
+                            clicked => {
+                                root.close-search();
+                            }
+                        }
+                    }
+                }
+
+                // 텍스트 서식 막대 (텍스트 추가·수정 도구일 때)
+                Rectangle {
+                    visible: root.text-tool && root.has-doc;
+                    x: (parent.width - self.width) / 2;
+                    y: 12px;
+                    width: format-layout.preferred-width;
+                    height: 44px;
+                    border-radius: 11px;
+                    background: Theme.card-bg;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    drop-shadow-blur: 18px;
+                    drop-shadow-offset-y: 4px;
+                    drop-shadow-color: #00000040;
+
+                    // 막대 위 클릭이 아래 페이지로 새지 않게 한다
+                    TouchArea { }
+
+                    format-layout := HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 6px;
+
+                        // 글꼴
+                        Rectangle {
+                            width: 176px;
+                            border-radius: 7px;
+                            background: font-touch.has-hover || root.font-list-open ? Theme.hover : Theme.fill;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 6px;
+                                Text {
+                                    text: root.text-font;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                    color: Theme.text-primary;
+                                }
+                                Image {
+                                    source: @image-url("icons/chevron_down.svg");
+                                    width: 14px;
+                                    colorize: Theme.text-secondary;
+                                }
+                            }
+                            font-touch := TouchArea {
+                                clicked => {
+                                    root.font-list-open = !root.font-list-open;
+                                }
+                            }
+                        }
+
+                        // 크기
+                        Rectangle {
+                            width: 26px;
+                            border-radius: 7px;
+                            background: minus-touch.has-hover ? Theme.hover : transparent;
+                            Text {
+                                text: "−";
+                                font-size: 16px;
+                                color: Theme.text-primary;
+                            }
+                            minus-touch := TouchArea {
+                                clicked => {
+                                    root.text-pt = max(6, root.text-pt - 1);
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: Math.round(root.text-pt * 10) / 10 + "pt";
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            min-width: 44px;
+                            color: Theme.text-primary;
+                        }
+
+                        Rectangle {
+                            width: 26px;
+                            border-radius: 7px;
+                            background: plus-touch.has-hover ? Theme.hover : transparent;
+                            Text {
+                                text: "+";
+                                font-size: 16px;
+                                color: Theme.text-primary;
+                            }
+                            plus-touch := TouchArea {
+                                clicked => {
+                                    root.text-pt = min(72, root.text-pt + 1);
+                                }
+                            }
+                        }
+
+                        // 굵게
+                        Rectangle {
+                            width: 30px;
+                            border-radius: 7px;
+                            background: root.text-bold ? Theme.accent-tint : (bold-touch.has-hover ? Theme.hover : transparent);
+                            Text {
+                                text: "가";
+                                font-weight: 800;
+                                color: root.text-bold ? Theme.accent : Theme.text-primary;
+                            }
+                            bold-touch := TouchArea {
+                                clicked => {
+                                    root.text-bold = !root.text-bold;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            Rectangle {
+                                height: 18px;
+                                background: Theme.border-standard;
+                            }
+                        }
+
+                        // 색
+                        for c in [#000000, #FF3B30, #007AFF, #34C759, #FF9500]: Rectangle {
+                            width: 26px;
+                            Rectangle {
+                                width: 20px;
+                                height: 20px;
+                                border-radius: 10px;
+                                background: c;
+                                border-width: root.text-color == c ? 2px : 0px;
+                                border-color: Theme.card-bg;
+                                drop-shadow-blur: root.text-color == c ? 0px : 0px;
+                            }
+                            Rectangle {
+                                visible: root.text-color == c;
+                                width: 26px;
+                                height: 26px;
+                                border-radius: 13px;
+                                border-width: 2px;
+                                border-color: Theme.accent;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.text-color = c;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 글꼴 목록
+                Rectangle {
+                    visible: root.font-list-open && root.text-tool && root.has-doc;
+                    x: (parent.width - format-layout.preferred-width) / 2 + 10px;
+                    y: 60px;
+                    width: 240px;
+                    height: min(360px, parent.height - 120px);
+                    border-radius: 10px;
+                    background: Theme.card-bg;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    drop-shadow-blur: 22px;
+                    drop-shadow-offset-y: 6px;
+                    drop-shadow-color: #00000050;
+                    clip: true;
+
+                    TouchArea { }
+
+                    ListView {
+                        for f in root.fonts: Rectangle {
+                            height: 28px;
+                            background: f == root.text-font ? Theme.accent-tint : (item-touch.has-hover ? Theme.hover-soft : transparent);
+                            Text {
+                                x: 12px;
+                                width: parent.width - 24px;
+                                text: f;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                color: f == root.text-font ? Theme.accent : Theme.text-primary;
+                            }
+                            item-touch := TouchArea {
+                                clicked => {
+                                    root.text-font = f;
+                                    root.font-list-open = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 알림 (저장 완료, 오류 등)
+                Rectangle {
+                    visible: root.toast != "";
+                    x: (parent.width - self.width) / 2;
+                    y: root.text-tool ? (root.search-visible ? 116px : 66px) : (root.search-visible ? 66px : 18px);
+                    width: toast-text.preferred-width + 36px;
+                    height: 36px;
+                    border-radius: 18px;
+                    background: Theme.floating-bg;
+                    drop-shadow-blur: 14px;
+                    drop-shadow-offset-y: 3px;
+                    drop-shadow-color: #00000050;
+
+                    toast-text := Text {
+                        text: root.toast;
+                        color: white;
+                        font-size: 13px;
+                    }
+                }
+
+                // 플로팅 바 (페이지 이동·확대 배율)
+                Rectangle {
+                    visible: root.has-doc;
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height - self.height - 22px;
+                    width: bar-layout.preferred-width;
+                    height: 40px;
+                    border-radius: 20px;
+                    background: Theme.floating-bg;
+                    drop-shadow-blur: 16px;
+                    drop-shadow-offset-y: 4px;
+                    drop-shadow-color: #00000050;
+
+                    bar-layout := HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 8px;
+
+                        page-input := TextInput {
+                            width: 44px;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            color: white;
+                            font-size: 13px;
+                            font-weight: 600;
+                            single-line: true;
+                            text: root.current-page + 1;
+                            accepted => {
+                                root.goto-page(self.text);
+                                keys.focus();
+                            }
+                        }
+
+                        Text {
+                            text: "/ " + root.page-count;
+                            vertical-alignment: center;
+                            color: #FFFFFFB0;
+                            font-size: 13px;
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            Rectangle {
+                                height: 16px;
+                                background: #FFFFFF40;
+                            }
+                        }
+
+                        Text {
+                            text: root.zoom-label;
+                            vertical-alignment: center;
+                            color: white;
+                            font-size: 13px;
+                            min-width: 40px;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                // ---------- 정보 창
+                if root.info-open: Sheet {
+                    title: "BossPDF";
+                    sheet-width: 400px;
+
+                    Text {
+                        text: "버전 " + root.app-version;
+                        color: Theme.text-secondary;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        PillButton {
+                            text: "업데이트 확인";
+                            primary: false;
+                            clicked => {
+                                root.check-update();
+                            }
+                        }
+
+                        PillButton {
+                            text: "암호 없이 저장…";
+                            primary: false;
+                            opacity: root.doc-encrypted ? 1 : 0.4;
+                            clicked => {
+                                if (root.doc-encrypted) {
+                                    root.save-unlocked();
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: root.doc-encrypted ? "이 문서는 암호가 걸려 있습니다. 암호를 푼 사본을 따로 저장할 수 있습니다." : "단축키: Ctrl+O 열기 · Ctrl+S 저장 · Ctrl+P 인쇄 · Ctrl+E 내보내기 · Ctrl+F 검색 · Ctrl+T 테마";
+                        color: Theme.text-secondary;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        PillButton {
+                            text: "닫기";
+                            clicked => {
+                                root.info-open = false;
+                                keys.focus();
+                            }
+                        }
+                    }
+                }
+
+                // ---------- 업데이트 창
+                if root.update-open: Sheet {
+                    title: "새 버전이 있습니다";
+                    sheet-width: 460px;
+
+                    Text {
+                        text: "v" + root.update-version + "  (지금 쓰는 버전 v" + root.app-version + ")";
+                        color: Theme.text-primary;
+                        font-weight: 600;
+                    }
+
+                    Rectangle {
+                        height: 150px;
+                        border-radius: 8px;
+                        background: Theme.fill;
+                        clip: true;
+                        ScrollView {
+                            Text {
+                                x: 12px;
+                                y: 10px;
+                                width: parent.width - 36px;
+                                text: root.update-notes == "" ? "(변경 내용 설명이 없습니다)" : root.update-notes;
+                                color: Theme.text-primary;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    if root.update-status != "": Text {
+                        text: root.update-status;
+                        color: Theme.text-secondary;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        PillButton {
+                            text: "나중에";
+                            primary: false;
+                            clicked => {
+                                root.update-open = false;
+                                keys.focus();
+                            }
+                        }
+
+                        PillButton {
+                            text: root.update-busy ? "받는 중…" : "업데이트";
+                            opacity: root.update-busy ? 0.5 : 1;
+                            clicked => {
+                                if (!root.update-busy) {
+                                    root.update-start();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---------- 내보내기 창
+                if root.export-open && root.has-doc: Sheet {
+                    title: "페이지 내보내기";
+
+                    FieldLabel {
+                        text: "내보낼 쪽";
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Choice {
+                            text: "전체 (" + root.page-count + "쪽)";
+                            selected: root.export-range-mode == 0;
+                            clicked => {
+                                root.export-range-mode = 0;
+                            }
+                        }
+
+                        Choice {
+                            text: "현재 쪽 (" + (root.current-page + 1) + ")";
+                            selected: root.export-range-mode == 1;
+                            clicked => {
+                                root.export-range-mode = 1;
+                            }
+                        }
+
+                        Choice {
+                            text: "직접 지정";
+                            selected: root.export-range-mode == 2;
+                            clicked => {
+                                root.export-range-mode = 2;
+                            }
+                        }
+                    }
+
+                    if root.export-range-mode == 2: LineEdit {
+                        placeholder-text: "예: 1-3, 5, 8-";
+                        text <=> root.export-range;
+                    }
+
+                    FieldLabel {
+                        text: "형식";
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Choice {
+                            text: "새 PDF";
+                            selected: root.export-kind == 0;
+                            clicked => {
+                                root.export-kind = 0;
+                            }
+                        }
+
+                        Choice {
+                            text: "쪽별 이미지";
+                            selected: root.export-kind == 1;
+                            clicked => {
+                                root.export-kind = 1;
+                            }
+                        }
+
+                        Choice {
+                            text: "이어 붙인 긴 이미지";
+                            selected: root.export-kind == 2;
+                            clicked => {
+                                root.export-kind = 2;
+                            }
+                        }
+                    }
+
+                    if root.export-kind != 0: FieldLabel {
+                        text: "이미지 형식과 해상도";
+                    }
+
+                    if root.export-kind != 0: HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Choice {
+                            text: "PNG";
+                            selected: !root.export-jpg;
+                            clicked => {
+                                root.export-jpg = false;
+                            }
+                        }
+
+                        Choice {
+                            text: "JPG";
+                            selected: root.export-jpg;
+                            clicked => {
+                                root.export-jpg = true;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 10px;
+                        }
+
+                        Choice {
+                            text: "100 DPI";
+                            selected: root.export-dpi == 100;
+                            clicked => {
+                                root.export-dpi = 100;
+                            }
+                        }
+
+                        Choice {
+                            text: "150 DPI";
+                            selected: root.export-dpi == 150;
+                            clicked => {
+                                root.export-dpi = 150;
+                            }
+                        }
+
+                        Choice {
+                            text: "300 DPI";
+                            selected: root.export-dpi == 300;
+                            clicked => {
+                                root.export-dpi = 300;
+                            }
+                        }
+                    }
+
+                    if root.export-error != "": Text {
+                        text: root.export-error;
+                        color: Theme.danger;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        PillButton {
+                            text: "취소";
+                            primary: false;
+                            clicked => {
+                                root.export-open = false;
+                                keys.focus();
+                            }
+                        }
+
+                        PillButton {
+                            text: "내보내기";
+                            clicked => {
+                                root.export-run();
+                            }
+                        }
+                    }
+                }
+
+                // ---------- 합치기 창
+                if root.merge-open: Sheet {
+                    title: "PDF·이미지 합치기";
+                    sheet-width: 520px;
+
+                    Text {
+                        text: "목록 순서대로 하나의 PDF로 합칩니다. PDF와 이미지를 섞어도 됩니다.";
+                        color: Theme.text-secondary;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Rectangle {
+                            height: 240px;
+                            horizontal-stretch: 1;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.border-standard;
+                            background: Theme.window-bg;
+                            clip: true;
+
+                            if root.merge-files.length == 0: Text {
+                                text: "[파일 추가]를 눌러 합칠 파일을 고르세요";
+                                color: Theme.text-secondary;
+                            }
+
+                            ListView {
+                                for name[i] in root.merge-files: Rectangle {
+                                    height: 30px;
+                                    background: i == root.merge-selected ? Theme.accent-tint : (row-touch.has-hover ? Theme.hover-soft : transparent);
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+                                        Text {
+                                            text: i + 1;
+                                            width: 22px;
+                                            vertical-alignment: center;
+                                            color: Theme.text-secondary;
+                                            font-size: 12px;
+                                        }
+
+                                        Text {
+                                            text: name;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                            color: i == root.merge-selected ? Theme.accent : Theme.text-primary;
+                                        }
+                                    }
+
+                                    row-touch := TouchArea {
+                                        clicked => {
+                                            root.merge-selected = i;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 6px;
+                            width: 96px;
+                            Choice {
+                                text: "파일 추가";
+                                clicked => {
+                                    root.merge-add();
+                                }
+                            }
+
+                            Choice {
+                                text: "▲ 위로";
+                                clicked => {
+                                    root.merge-move(root.merge-selected, -1);
+                                }
+                            }
+
+                            Choice {
+                                text: "▼ 아래로";
+                                clicked => {
+                                    root.merge-move(root.merge-selected, 1);
+                                }
+                            }
+
+                            Choice {
+                                text: "빼기";
+                                clicked => {
+                                    root.merge-remove(root.merge-selected);
+                                }
+                            }
+                        }
+                    }
+
+                    FieldLabel {
+                        text: "이미지를 넣는 방식";
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Choice {
+                            text: "A4에 맞춤";
+                            selected: root.merge-fit-a4;
+                            clicked => {
+                                root.merge-fit-a4 = true;
+                            }
+                        }
+
+                        Choice {
+                            text: "원본 크기";
+                            selected: !root.merge-fit-a4;
+                            clicked => {
+                                root.merge-fit-a4 = false;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 10px;
+                        }
+
+                        for label[i] in ["여백 없음", "좁게", "기본", "넓게"]: Choice {
+                            text: label;
+                            selected: root.merge-margin == i;
+                            opacity: root.merge-fit-a4 ? 1 : 0.4;
+                            clicked => {
+                                root.merge-margin = i;
+                            }
+                        }
+                    }
+
+                    if root.merge-error != "": Text {
+                        text: root.merge-error;
+                        color: Theme.danger;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        PillButton {
+                            text: "닫기";
+                            primary: false;
+                            clicked => {
+                                root.merge-open = false;
+                                keys.focus();
+                            }
+                        }
+
+                        PillButton {
+                            text: "합치기";
+                            opacity: root.merge-files.length > 0 ? 1 : 0.4;
+                            clicked => {
+                                root.merge-run();
+                            }
+                        }
+                    }
+                }
+
+                // 비밀번호 입력
+                if root.ask-password: Rectangle {
+                    background: #00000066;
+
+                    TouchArea { }
+
+                    Rectangle {
+                        width: 340px;
+                        height: pw-layout.preferred-height;
+                        border-radius: 14px;
+                        background: Theme.card-bg;
+                        drop-shadow-blur: 30px;
+                        drop-shadow-color: #00000060;
+
+                        pw-layout := VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            Text {
+                                text: "비밀번호가 필요한 문서입니다";
+                                font-size: 15px;
+                                font-weight: 600;
+                                color: Theme.text-primary;
+                            }
+
+                            pw-input := LineEdit {
+                                input-type: password;
+                                placeholder-text: "비밀번호";
+                                accepted(text) => {
+                                    root.password-submitted(text);
+                                }
+                                init => {
+                                    self.focus();
+                                }
+                            }
+
+                            if root.password-error != "": Text {
+                                text: root.password-error;
+                                color: Theme.danger;
+                                font-size: 12px;
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing: 8px;
+
+                                PillButton {
+                                    text: "취소";
+                                    primary: false;
+                                    clicked => {
+                                        root.password-cancelled();
+                                    }
+                                }
+
+                                PillButton {
+                                    text: "열기";
+                                    clicked => {
+                                        root.password-submitted(pw-input.text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

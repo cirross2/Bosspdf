@@ -1,4 +1,10 @@
-# Python
+# Rust
+/target
+/vendor
+/dist
+*.log
+
+# Python (legacy-python)
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,10 +12,8 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
-
-# PyInstaller & Packaging build artifacts
-build/
-dist/
+legacy-python/build/
+legacy-python/dist/
 *.spec.bak
 
 # Virtual Environment
