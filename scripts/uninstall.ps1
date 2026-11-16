@@ -11,6 +11,10 @@ foreach ($ext in $extensions) {
         Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+$mergePdfReg = "HKCU:\Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"
+if (Test-Path $mergePdfReg) {
+    Remove-Item -Path $mergePdfReg -Recurse -Force -ErrorAction SilentlyContinue
+}
 $pdfReg = "HKCU:\Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.Open"
 if (Test-Path $pdfReg) {
     Remove-Item -Path $pdfReg -Recurse -Force -ErrorAction SilentlyContinue

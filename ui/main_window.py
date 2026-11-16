@@ -298,6 +298,8 @@ class MainWindow(QMainWindow):
         self.act_print_preview = make_action("인쇄 미리보기...", self.print_preview)
         self.act_img_merge = make_action("이미지를 PDF로 합치기...", self.open_image_merge_dialog,
                                          tip="여러 이미지를 순서대로 하나의 PDF로 합치기")
+        self.act_pdf_merge = make_action("PDF 여러 개 합치기...", self.open_pdf_merge_dialog,
+                                         tip="여러 PDF를 순서대로 하나의 PDF로 합치기")
         self.act_reorder = make_action("페이지 순서 관리...", self.open_page_reorder_dialog,
                                        tip="전체 페이지 순서 변경 및 관리")
         self.act_find = make_action("단어 검색", self.open_search_bar, QKeySequence.StandardKey.Find, "단어 검색 (Ctrl+F)")
@@ -357,6 +359,7 @@ class MainWindow(QMainWindow):
         self.main_menu.addSeparator()
         self.main_menu.addAction(self.act_reorder)
         self.main_menu.addAction(self.act_img_merge)
+        self.main_menu.addAction(self.act_pdf_merge)
         self.main_menu.addSeparator()
         menu_view = self.main_menu.addMenu("보기")
         for act in (self.act_sidebar, self.act_fullscreen, self.act_theme):
@@ -611,6 +614,7 @@ class MainWindow(QMainWindow):
         self.act_fit_width.setIcon(get_icon("fit_width", is_dark=is_dark))
         self.act_fit_page.setIcon(get_icon("fit_page", is_dark=is_dark))
         self.act_img_merge.setIcon(get_icon("images", is_dark=is_dark))
+        self.act_pdf_merge.setIcon(get_icon("merge", is_dark=is_dark))
         self.act_reorder.setIcon(get_icon("reorder", is_dark=is_dark))
         self.act_find.setIcon(get_icon("search", is_dark=is_dark))
 
@@ -869,6 +873,15 @@ class MainWindow(QMainWindow):
             merged_pdf_path = dlg.get_output_pdf_path()
             if merged_pdf_path and os.path.exists(merged_pdf_path):
                 self.load_pdf(merged_pdf_path)
+
+    def open_pdf_merge_dialog(self):
+        from ui.pdf_merge_dialog import PdfMergeDialog
+        current = self.pdf_engine.file_path if self.pdf_engine.is_loaded() else None
+        dlg = PdfMergeDialog(parent=self, initial_files=[current] if current else None)
+        if dlg.exec():
+            merged_pdf_path = dlg.get_output_pdf_path()
+            if merged_pdf_path and os.path.exists(merged_pdf_path):
+                MainWindow.open_window(merged_pdf_path)
 
     def open_page_reorder_dialog(self):
         if not self.pdf_engine.is_loaded():

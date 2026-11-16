@@ -49,6 +49,12 @@ def unregister_context_menu():
         r"Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.Open"
     )
 
+    # 4. PDF 합치기 키
+    _delete_key_recursive(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"
+    )
+
     print("✅ 윈도우 우클릭 메뉴 삭제 완료!")
     return True
 

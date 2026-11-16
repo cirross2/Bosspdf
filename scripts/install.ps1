@@ -46,6 +46,16 @@ foreach ($ext in $extensions) {
     Set-ItemProperty -Path $cmdPath -Name '(default)' -Value "`"$exePath`" --merge-images `"%1`""
 }
 
+# PDF 여러 개 선택 후 우클릭 → 하나의 PDF로 합치기
+$mergePdfReg = "HKCU:\Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"
+New-Item -Path $mergePdfReg -Force | Out-Null
+Set-ItemProperty -Path $mergePdfReg -Name '(default)' -Value "BossPDF로 PDF 합치기"
+Set-ItemProperty -Path $mergePdfReg -Name 'Icon' -Value "`"$exePath`",0"
+Set-ItemProperty -Path $mergePdfReg -Name 'MultiSelectModel' -Value "Player"
+$mergePdfCmd = Join-Path $mergePdfReg "command"
+New-Item -Path $mergePdfCmd -Force | Out-Null
+Set-ItemProperty -Path $mergePdfCmd -Name '(default)' -Value "`"$exePath`" --merge-pdfs `"%1`""
+
 # PDF 문서 전용 아이콘 등록 (ProgID 및 Applications)
 $docIconPath = Join-Path $installDir "resources\pdf_doc_icon.ico"
 if (-not (Test-Path $docIconPath)) {

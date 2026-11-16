@@ -30,6 +30,7 @@ class ImageMergeDialog(QDialog):
         self.setAcceptDrops(True)
 
         self.image_paths: List[str] = []
+        self._output_pdf_path: Optional[str] = None
         self._init_ui()
 
         if initial_files:
@@ -40,6 +41,10 @@ class ImageMergeDialog(QDialog):
             ]
             if filtered:
                 self._add_files(filtered)
+
+    def get_output_pdf_path(self) -> Optional[str]:
+        """합치기에 성공했을 때 저장된 PDF 경로"""
+        return self._output_pdf_path
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -335,6 +340,7 @@ class ImageMergeDialog(QDialog):
                 "성공",
                 f"총 {len(self.image_paths)}장의 이미지가 순서대로 성공적으로 병합되었습니다!\n\n저장 경로: {out_file}"
             )
+            self._output_pdf_path = out_file
             self.pdf_created.emit(out_file)
             self.accept()
         except Exception as e:

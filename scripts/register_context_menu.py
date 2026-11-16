@@ -2,6 +2,7 @@
 윈도우 파일 탐색기 마우스 우클릭 메뉴 등록 스크립트 (HKCU 기반, 관리자 권한 불필요)
 - 이미지 파일 우클릭: "BossPDF로 PDF 병합"
 - PDF 파일 우클릭: "BossPDF로 열기"
+- PDF 파일 여러 개 선택 후 우클릭: "BossPDF로 PDF 합치기"
 """
 import sys
 import os
@@ -57,6 +58,21 @@ def register_context_menu(exe_path: str = None):
         exe_cmd=f'{exe_path} "%1"',
         icon_path=exe_path.split('"')[1] if exe_path.startswith('"') else exe_path
     )
+
+    # 4. PDF 여러 개 선택 후 '하나의 PDF로 합치기' 메뉴 등록
+    merge_key = r"Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"
+    _set_reg_verb(
+        sub_key=merge_key,
+        menu_title="BossPDF로 PDF 합치기",
+        exe_cmd=f'{exe_path} --merge-pdfs "%1"',
+        icon_path=exe_path.split('"')[1] if exe_path.startswith('"') else exe_path
+    )
+    try:
+        # 16개 이상 선택해도 메뉴가 보이도록 (기본값은 15개 제한)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, merge_key) as key:
+            winreg.SetValueEx(key, "MultiSelectModel", 0, winreg.REG_SZ, "Player")
+    except Exception as e:
+        print(f"경고: MultiSelectModel 등록 중 오류 발생 - {e}")
 
     print("✅ 윈도우 탐색기 마우스 우클릭 메뉴 등록 완료!")
     return True

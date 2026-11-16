@@ -3,7 +3,7 @@
 
 #define MyAppName "BossPDF"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.5"
+  #define MyAppVersion "1.0.6"
 #endif
 #define MyAppPublisher "BossPDF Software"
 #define MyAppExeName "BossPDF.exe"
@@ -64,6 +64,12 @@ Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.jpeg\shell\BossPDF
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webp\shell\BossPDF.MergeToPdf"; ValueType: string; ValueName: ""; ValueData: "BossPDF로 PDF 병합"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webp\shell\BossPDF.MergeToPdf"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#MyAppExeName}"",0"
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webp\shell\BossPDF.MergeToPdf\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --merge-images ""%1"""
+
+; 1-2. 파일 탐색기 우클릭 PDF 여러 개 합치기 메뉴 등록 (MultiSelectModel=Player: 16개 이상 선택해도 표시)
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"; ValueType: string; ValueName: ""; ValueData: "BossPDF로 PDF 합치기"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#MyAppExeName}"",0"
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.pdf\shell\BossPDF.MergePdfs\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --merge-pdfs ""%1"""
 
 ; 2. PDF 전용 문서 아이콘 및 연결 등록
 Root: HKCU; Subkey: "Software\Classes\BossPDF.Document"; ValueType: string; ValueName: ""; ValueData: "BossPDF PDF 문서"; Flags: uninsdeletekey

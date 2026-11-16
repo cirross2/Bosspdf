@@ -4,6 +4,7 @@ BossPDF 애플리케이션 실행 진입점 (Entry Point)
 - 파일 인자: PDF 파일 직접 열람
 - 이미 BossPDF가 떠 있으면: 열기 요청만 넘기고 종료 (기존 프로세스가 새 창으로 열어 거의 즉시 표시)
 - --merge-images 인자: 탐색기 우클릭 다중 이미지 선택 시 로컬 IPC 취합 후 단일 병합 창 실행
+- --merge-pdfs 인자: 탐색기 우클릭 다중 PDF 선택 시 같은 방식으로 취합 후 PDF 합치기 창 실행
 """
 import sys
 import os
@@ -80,6 +81,37 @@ def main():
         dlg.exec()
         release_merge_mutex(mutex)
         sys.exit(0)
+
+    # 1-2. 탐색기 마우스 우클릭 다중 PDF 합치기 요청 처리
+    if "--merge-pdfs" in args:
+        from core.ipc_manager import handle_merge_cli, release_merge_mutex, CHANNEL_PDFS
+        idx = args.index("--merge-pdfs")
+        pdf_files = [arg for arg in args[idx + 1:] if not arg.startswith("--")]
+
+        should_exit, collected_files, mutex = handle_merge_cli(pdf_files, channel=CHANNEL_PDFS)
+        if should_exit:
+            sys.exit(0)
+
+        app, icon = _create_app()
+        from ui.pdf_merge_dialog import PdfMergeDialog
+        dlg = PdfMergeDialog(initial_files=collected_files, queue_channel=CHANNEL_PDFS)
+        if icon is not None:
+            dlg.setWindowIcon(icon)
+        accepted = dlg.exec()
+        release_merge_mutex(mutex)
+        merged_path = dlg.get_output_pdf_path() if accepted else None
+        if not merged_path or not os.path.exists(merged_path):
+            sys.exit(0)
+
+        # 합친 결과를 바로 열어 보여 준다 (실행 중인 BossPDF가 있으면 그쪽 새 창으로)
+        from core.single_instance import forward_to_running_instance
+        if forward_to_running_instance([merged_path]):
+            sys.exit(0)
+        from ui.main_window import MainWindow
+        window = MainWindow.open_window(merged_path)
+        if icon is not None:
+            window.setWindowIcon(icon)
+        sys.exit(app.exec())
 
     # 인자로 넘어온 PDF 파일
     pdf_to_open = None
