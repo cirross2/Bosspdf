@@ -392,6 +392,7 @@ class MainWindow(QMainWindow):
         self.rail.addSeparator()
         self.rail.addAction(self.act_open)
         self.rail.addAction(self.act_save)
+        self.rail.addAction(self.act_print)
         self.rail.addSeparator()
         for act in (self.act_mode_hand, self.act_mode_text, self.act_mode_whiteout,
                     self.act_mode_edit_text, self.act_mode_highlight, self.act_mode_pen):
